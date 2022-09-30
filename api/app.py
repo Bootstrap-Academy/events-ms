@@ -1,10 +1,6 @@
 """
-## Authentication
-- To authenticate requests, the `Authorization` header must contain a valid API token.
-
-## Requirements
-Some endpoints require one or more of the following conditions to be met:
-- **AUTH**: The request is authenticated using a valid API token (static/JWT).
+## Authentication, Special parameters, Requirements
+See [Auth Microservice](/auth/docs).
 """
 
 from typing import Awaitable, Callable, TypeVar
@@ -29,7 +25,7 @@ T = TypeVar("T")
 logger = get_logger(__name__)
 
 app = FastAPI(
-    title="FastAPI",
+    title="Bootstrap Academy Backend: Events Microservice",
     description=__doc__,
     version=get_version().description,
     root_path=settings.root_path,
@@ -48,7 +44,9 @@ def setup_app() -> None:
 
     if settings.sentry_dsn:
         logger.debug("initializing sentry")
-        setup_sentry(app, settings.sentry_dsn, "FastAPI", get_version().description)
+        setup_sentry(
+            app, settings.sentry_dsn, "Bootstrap Academy Backend: Events Microservice", get_version().description
+        )
 
     if settings.debug:
         app.add_middleware(

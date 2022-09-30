@@ -12,7 +12,7 @@ from api.database.database import Base
 from api.settings import settings
 
 
-NAME = None
+NAME = "events"
 
 
 # this is the Alembic Config object, which provides
