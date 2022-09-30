@@ -1,4 +1,5 @@
 import secrets
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseSettings, Field
@@ -16,6 +17,8 @@ class Settings(BaseSettings):
 
     jwt_secret: str = secrets.token_urlsafe(64)
 
+    auth_url: str = ""
+
     internal_jwt_ttl: int = 10
 
     database_url: str = Field(
@@ -27,7 +30,8 @@ class Settings(BaseSettings):
     max_overflow: int = 20
     sql_show_statements: bool = False
 
-    redis_url: str = Field("redis://redis:6379/0", regex=r"^redis://.*$")
+    redis_url: str = Field("redis://redis:6379/4", regex=r"^redis://.*$")
+    auth_redis_url: str = Field("redis://redis:6379/0", regex=r"^redis://.*$")
 
     sentry_dsn: str | None = None
 

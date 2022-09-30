@@ -127,7 +127,7 @@ omit = ["api/__main__.py", "tests/*"]
 concurrency = ["thread", "greenlet"]
 
 [tool.coverage.report]
-fail_under = 100
+fail_under = 70
 exclude_lines = ["if TYPE_CHECKING:", "if settings.debug:"]
 
 [build-system]
