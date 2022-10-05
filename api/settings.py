@@ -19,6 +19,8 @@ class Settings(BaseSettings):
 
     auth_url: str = ""
 
+    calendly_cache_ttl: int = 3600  # 1 hour
+
     internal_jwt_ttl: int = 10
 
     database_url: str = Field(

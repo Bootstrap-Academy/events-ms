@@ -4,10 +4,16 @@ from typing import cast
 from httpx import AsyncClient
 from pydantic import BaseModel, Extra
 
+from api.database import db
+from api.models.calendly_links import CalendlyLink
+from api.redis import redis
+from api.settings import settings
+
 
 class EventType(BaseModel):
     uri: str
     name: str
+    scheduling_url: str
     active: bool
     duration: int
 
@@ -19,7 +25,7 @@ def get_client(api_token: str) -> AsyncClient:
     return AsyncClient(base_url="https://api.calendly.com", headers={"Authorization": f"Bearer {api_token}"})
 
 
-async def get_user(api_token: str) -> str | None:
+async def fetch_user(api_token: str) -> str | None:
     async with get_client(api_token) as client:
         response = await client.get("/users/me")
         if response.status_code != 200:
@@ -28,7 +34,7 @@ async def get_user(api_token: str) -> str | None:
         return cast(str, response.json()["resource"]["uri"])
 
 
-async def get_event_type(api_token: str, event_type: str) -> EventType | None:
+async def fetch_event_type(api_token: str, event_type: str) -> EventType | None:
     async with get_client(api_token) as client:
         response = await client.get(f"/event_types/{event_type.split('/')[-1]}")
         if response.status_code != 200:
@@ -66,7 +72,7 @@ async def find_event_type(api_token: str, user: str, scheduling_url: str | None)
     return None
 
 
-async def get_available_slots(api_token: str, event_type: str) -> list[datetime] | None:
+async def fetch_available_slots(api_token: str, event_type: str) -> list[datetime] | None:
     today = date.today()
     async with get_client(api_token) as client:
         response = await client.get(
@@ -92,3 +98,34 @@ async def create_single_use_link(api_token: str, event_type: str) -> str | None:
             return None
 
         return cast(str, response.json()["resource"]["booking_url"])
+
+
+async def get_calendly_link(user_id: str) -> EventType | None:
+    if cached := await redis.get(key := f"calendly_link:{user_id}"):
+        return EventType.parse_raw(cached)
+
+    link = await db.get(CalendlyLink, user_id=user_id)
+    if not link:
+        await redis.delete(key)
+        return None
+
+    return await update_calendly_link_cache(user_id, link)
+
+
+async def update_calendly_link_cache(user_id: str, link: CalendlyLink | None = None) -> EventType | None:
+    if not link:
+        link = await db.get(CalendlyLink, user_id=user_id)
+        if not link:
+            await clear_calendly_link_cache(user_id)
+            return None
+
+    out = await fetch_event_type(link.api_token, link.uri)
+    if out:
+        await redis.setex(f"calendly_link:{user_id}", settings.calendly_cache_ttl, out.json())
+    else:
+        await clear_calendly_link_cache(user_id)
+    return out
+
+
+async def clear_calendly_link_cache(user_id: str) -> None:
+    await redis.delete(f"calendly_link:{user_id}")
