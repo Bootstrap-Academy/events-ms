@@ -1,60 +1,94 @@
-import json
-import re
 from datetime import date, datetime, timedelta
+from typing import cast
 
 from httpx import AsyncClient
-from pydantic import BaseModel
+from pydantic import BaseModel, Extra
 
 
 class EventType(BaseModel):
-    uuid: str
+    uri: str
+    name: str
+    active: bool
     duration: int
 
+    class Config:
+        extra = Extra.ignore
 
-async def get_event_type(url: str) -> EventType | None:
-    async with AsyncClient() as client:
-        response = await client.get(url)
+
+def get_client(api_token: str) -> AsyncClient:
+    return AsyncClient(base_url="https://api.calendly.com", headers={"Authorization": f"Bearer {api_token}"})
+
+
+async def get_user(api_token: str) -> str | None:
+    async with get_client(api_token) as client:
+        response = await client.get("/users/me")
         if response.status_code != 200:
             return None
 
-        text = response.text
+        return cast(str, response.json()["resource"]["uri"])
 
-    for match in re.findall(r"\{.+}", text):
-        try:
-            data = json.loads(match)
-        except json.JSONDecodeError:
-            continue
 
-        if not isinstance(data, dict):
-            continue
-        if not isinstance(modules := data.get("modules"), dict):
-            continue
-        if not isinstance(booking := modules.get("booking"), dict):
-            continue
-        if not isinstance(event_type := booking.get("event_type"), dict):
-            continue
+async def get_event_type(api_token: str, event_type: str) -> EventType | None:
+    async with get_client(api_token) as client:
+        response = await client.get(f"/event_types/{event_type.split('/')[-1]}")
+        if response.status_code != 200:
+            return None
 
         try:
-            return EventType.parse_obj(event_type)
+            return EventType.parse_obj(response.json()["resource"])
         except ValueError:
-            continue
+            return None
+
+
+async def find_event_type(api_token: str, user: str, scheduling_url: str | None) -> EventType | None:
+    page_token: str | None = None
+    async with get_client(api_token) as client:
+        params: dict[str, int | str] = {"user": user, "count": 100}
+        if page_token:
+            params["page_token"] = page_token
+
+        response = await client.get("/event_types", params=params)
+        if response.status_code != 200:
+            return None
+
+        collection = response.json()["collection"]
+
+    if not scheduling_url and len(collection) > 1:
+        raise ValueError
+
+    for event_type in collection:
+        if not scheduling_url or event_type["scheduling_url"] == scheduling_url:
+            try:
+                return EventType.parse_obj(event_type)
+            except ValueError:
+                return None
 
     return None
 
 
-async def get_available_slots(event_uuid: str, days: int = 30) -> list[datetime] | None:
-    async with AsyncClient() as client:
-        today = date.today()
+async def get_available_slots(api_token: str, event_type: str) -> list[datetime] | None:
+    today = date.today()
+    async with get_client(api_token) as client:
         response = await client.get(
-            f"https://calendly.com/api/booking/event_types/{event_uuid}/calendar/range",
-            params={"timezone": "UTC", "range_start": str(today), "range_end": str(today + timedelta(days=days))},
+            "/event_type_available_times",
+            params={"event_type": event_type, "start_time": str(today), "end_time": str(today + timedelta(days=7))},
         )
         if response.status_code != 200:
             return None
 
         return [
-            datetime.fromisoformat(spot["start_time"].rstrip("Z"))
-            for day in response.json().get("days", [])
-            for spot in day.get("spots", [])
-            if spot.get("status") == "available"
+            datetime.fromisoformat(slot["start_time"].rstrip("Z"))
+            for slot in response.json()["collection"]
+            if slot["status"] == "available"
         ]
+
+
+async def create_single_use_link(api_token: str, event_type: str) -> str | None:
+    async with get_client(api_token) as client:
+        response = await client.post(
+            "/scheduling_links", json={"owner": event_type, "owner_type": "EventType", "max_event_count": 1}
+        )
+        if response.status_code != 201:
+            return None
+
+        return cast(str, response.json()["resource"]["booking_url"])
