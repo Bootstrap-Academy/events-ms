@@ -111,7 +111,7 @@ async def find_event_type(api_token: str, user: str, scheduling_url: str | None)
 
 
 async def fetch_available_slots(api_token: str, event_type: str) -> list[datetime] | None:
-    today = date.today()
+    today = datetime.utcnow() + timedelta(hours=1)
     async with get_client(api_token) as client:
         response = await client.get(
             "/event_type_available_times",

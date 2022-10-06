@@ -10,8 +10,8 @@ from api.database import db
 from api.exceptions.auth import admin_responses
 from api.exceptions.calendly import (
     APITokenMissingError,
+    CalendlyNotConfiguredError,
     EventTypeAmbiguousError,
-    EventTypeNotConfiguredError,
     EventTypeNotFoundError,
     InvalidAPITokenError,
 )
@@ -26,7 +26,7 @@ router = APIRouter()
 @router.get(
     "/calendly/{user_id}",
     dependencies=[require_verified_email],
-    responses=admin_responses(EventType, EventTypeNotConfiguredError),
+    responses=admin_responses(EventType, CalendlyNotConfiguredError),
 )
 async def get_configured_event_type(user_id: str = get_user(require_self_or_admin=True)) -> Any:
     """
@@ -36,7 +36,7 @@ async def get_configured_event_type(user_id: str = get_user(require_self_or_admi
     """
 
     if not (out := await calendly.get_calendly_link(user_id)):
-        raise EventTypeNotConfiguredError
+        raise CalendlyNotConfiguredError
 
     return out
 
@@ -86,7 +86,7 @@ async def configure_event_type(data: SetupEventType, user_id: str = get_user(req
 @router.delete(
     "/calendly/{user_id}",
     dependencies=[require_verified_email],
-    responses=admin_responses(bool, EventTypeNotConfiguredError),
+    responses=admin_responses(bool, CalendlyNotConfiguredError),
 )
 async def delete_configured_event_type(user_id: str = get_user(require_self_or_admin=True)) -> Any:
     """
@@ -97,7 +97,7 @@ async def delete_configured_event_type(user_id: str = get_user(require_self_or_a
 
     link = await db.get(models.CalendlyLink, user_id=user_id)
     if not link:
-        raise EventTypeNotConfiguredError
+        raise CalendlyNotConfiguredError
 
     if user := await calendly.fetch_user(link.api_token):
         await calendly.update_webhooks(user, link, delete=True)

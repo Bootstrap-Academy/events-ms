@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     jwt_secret: str = secrets.token_urlsafe(64)
 
     auth_url: str = ""
+    skills_url: str = ""
+    shop_url: str = ""
+
+    webinar_skill: str = "instructor"
+    coaching_skill: str = "instructor"
+    examiner_skill: str = "examiner"
 
     public_base_url: str = "http://localhost:8000"
 

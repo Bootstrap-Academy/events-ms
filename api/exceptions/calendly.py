@@ -3,10 +3,10 @@ from fastapi import status
 from .api_exception import APIException
 
 
-class EventTypeNotConfiguredError(APIException):
+class CalendlyNotConfiguredError(APIException):
     status_code = status.HTTP_404_NOT_FOUND
-    detail = "Event type not configured"
-    description = "The event type has not been configured yet."
+    detail = "Calendly not configured"
+    description = "The calendly event type has not been configured yet."
 
 
 class APITokenMissingError(APIException):
