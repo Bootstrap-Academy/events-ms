@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, Request, Response
 
 from api import models
 from api.auth import get_user, require_verified_email
@@ -15,7 +15,7 @@ from api.exceptions.calendly import (
     EventTypeNotFoundError,
     InvalidAPITokenError,
 )
-from api.schemas.calendly import SetupEventType
+from api.schemas.calendly import SetupEventType, WebhookData
 from api.services import calendly
 from api.services.calendly import EventType
 
@@ -60,7 +60,7 @@ async def configure_event_type(data: SetupEventType, user_id: str = get_user(req
         if not data.api_token:
             raise APITokenMissingError
 
-        await db.add(link := models.CalendlyLink(user_id=user_id, api_token=data.api_token))
+        await db.add(link := models.CalendlyLink.new(user_id, data.api_token))
     elif data.api_token:
         link.api_token = data.api_token
 
@@ -69,7 +69,7 @@ async def configure_event_type(data: SetupEventType, user_id: str = get_user(req
         raise InvalidAPITokenError
 
     try:
-        event_type = await calendly.find_event_type(link.api_token, calendly_user, data.scheduling_url)
+        event_type = await calendly.find_event_type(link.api_token, calendly_user.uri, data.scheduling_url)
     except ValueError:
         raise EventTypeAmbiguousError
 
@@ -77,6 +77,9 @@ async def configure_event_type(data: SetupEventType, user_id: str = get_user(req
         raise EventTypeNotFoundError
 
     link.uri = event_type.uri
+
+    await calendly.update_webhooks(calendly_user, link)
+
     return await calendly.update_calendly_link_cache(user_id, link)
 
 
@@ -96,7 +99,28 @@ async def delete_configured_event_type(user_id: str = get_user(require_self_or_a
     if not link:
         raise EventTypeNotConfiguredError
 
+    if user := await calendly.fetch_user(link.api_token):
+        await calendly.update_webhooks(user, link, delete=True)
+
     await db.delete(link)
     await calendly.clear_calendly_link_cache(user_id)
 
     return True
+
+
+@router.post("/calendly/{user_id}/webhook", include_in_schema=False)
+async def handle_webhook(
+    data: WebhookData, user_id: str, request: Request, response: Response, calendly_webhook_signature: str = Header()
+) -> Any:
+    link = await db.get(models.CalendlyLink, user_id=user_id)
+    if not link:
+        response.status_code = 404
+        return
+
+    if not calendly.verify_webhook_signature(
+        (await request.body()).decode(), calendly_webhook_signature, link.webhook_signing_key
+    ):
+        response.status_code = 401
+        return
+
+    print(data)

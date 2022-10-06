@@ -22,6 +22,7 @@ def upgrade() -> None:
         sa.Column("user_id", sa.String(length=36), nullable=False),
         sa.Column("api_token", sa.String(length=512), nullable=True),
         sa.Column("uri", sa.String(length=256), nullable=True),
+        sa.Column("webhook_signing_key", sa.String(length=128), nullable=True),
         sa.PrimaryKeyConstraint("user_id"),
         sa.UniqueConstraint("user_id"),
         mysql_collate="utf8mb4_bin",
