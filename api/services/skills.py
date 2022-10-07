@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Extra
 
 from api.services.internal import InternalService
 from api.settings import settings
@@ -7,6 +7,9 @@ from api.settings import settings
 class Skill(BaseModel):
     id: str
     dependencies: set[str]
+
+    class Config:
+        extra = Extra.ignore
 
 
 async def get_skills() -> list[Skill]:

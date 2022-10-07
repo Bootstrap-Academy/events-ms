@@ -11,3 +11,4 @@ class BookedExam(Base):
     skill_id: Mapped[str] = Column(String(256), primary_key=True)
     examiner_id: Mapped[str] = Column(String(36))
     confirmed: Mapped[bool] = Column(Boolean)
+    calendly_link: Mapped[str] = Column(String(256))

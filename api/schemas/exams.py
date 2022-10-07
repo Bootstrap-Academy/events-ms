@@ -16,6 +16,6 @@ class BookedExam(BaseModel):
 
 
 class ExamSlot(BaseModel):
-    exam: Exam = Field(description="The exam")
+    price: int = Field(description="The price of the exam")
     start: datetime = Field(description="The start time of the slot")
     end: datetime = Field(description="The end time of the slot")
