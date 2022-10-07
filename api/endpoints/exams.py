@@ -16,7 +16,7 @@ from api.exceptions.skills import SkillNotFoundError, SkillRequirementsNotMetErr
 from api.schemas.exams import BookedExam, Exam, ExamSlot
 from api.schemas.user import User
 from api.services import calendly, shop
-from api.services.skills import complete_skill, exists_skill, get_completed_skills, get_lecturers
+from api.services.skills import complete_skill, get_completed_skills, get_lecturers, get_skill
 from api.settings import settings
 
 
@@ -75,7 +75,13 @@ async def get_available_times(skill_id: str) -> Any:
     "/exams/{skill_id}/{examiner}",
     dependencies=[require_verified_email],
     responses=verified_responses(
-        str, ExamNotFoundError, SkillNotFoundError, ExamAlreadyBookedError, ExamAlreadyPassedError, NotEnoughCoinsError
+        str,
+        ExamNotFoundError,
+        SkillNotFoundError,
+        ExamAlreadyBookedError,
+        ExamAlreadyPassedError,
+        SkillRequirementsNotMetError,
+        NotEnoughCoinsError,
     ),
 )
 async def book_exam(skill_id: str, examiner: str, user: User = user_auth) -> Any:
@@ -99,11 +105,15 @@ async def book_exam(skill_id: str, examiner: str, user: User = user_auth) -> Any
     if await db.exists(filter_by(models.BookedExam, user_id=user.id, skill_id=skill_id)):
         raise ExamAlreadyBookedError
 
-    if not await exists_skill(skill_id):
+    if not (skill := await get_skill(skill_id)):
         raise SkillNotFoundError
 
-    if skill_id in await get_completed_skills(user.id):
+    completed_skills = await get_completed_skills(user.id)
+    if skill_id in completed_skills:
         raise ExamAlreadyPassedError
+
+    if not skill.dependencies.issubset(completed_skills):
+        raise SkillRequirementsNotMetError
 
     if not await shop.spend_coins(user.id, settings.exam_price):
         raise NotEnoughCoinsError

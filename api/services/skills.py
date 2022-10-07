@@ -1,15 +1,22 @@
+from pydantic import BaseModel
+
 from api.services.internal import InternalService
 from api.settings import settings
 
 
-async def get_skills() -> set[str]:
+class Skill(BaseModel):
+    id: str
+    dependencies: set[str]
+
+
+async def get_skills() -> list[Skill]:
     async with InternalService.SKILLS.client as client:
         response = await client.get("/skills")
-        return set(response.json())
+        return [Skill.parse_obj(skill) for skill in response.json()]
 
 
-async def exists_skill(skill: str) -> bool:
-    return skill in await get_skills()
+async def get_skill(skill: str) -> Skill | None:
+    return next(iter(s for s in await get_skills() if s.id == skill), None)
 
 
 async def get_completed_skills(user_id: str) -> set[str]:
