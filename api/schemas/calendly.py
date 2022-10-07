@@ -8,6 +8,8 @@ class SetupEventType(BaseModel):
 
 class WebhookPayload(BaseModel):
     event: str
+    email: str
+    name: str
 
     class Config:
         extra = Extra.ignore

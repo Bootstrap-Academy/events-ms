@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     coaching_skill: str = "instructor"
     examiner_skill: str = "examiner"
 
+    exam_price: int = 15000  # 150€ = 15000 MC
+    exam_xp: int = 500
+
     public_base_url: str = "http://localhost:8000"
 
     calendly_cache_ttl: int = 3600  # 1 hour

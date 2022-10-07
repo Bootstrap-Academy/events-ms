@@ -25,7 +25,7 @@ router = APIRouter()
 @router.get("/coachings", dependencies=[require_verified_email], responses=verified_responses(list[Coaching]))
 async def get_coachings(user: User = user_auth) -> Any:
     """
-    Return a list of all coachings for a user.
+    Return a list of all coachings for an instructor.
 
     *Requirements:* **VERIFIED**
     """

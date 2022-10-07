@@ -6,7 +6,7 @@ from fastapi import APIRouter, Header, Request, Response
 
 from api import models
 from api.auth import get_user, require_verified_email
-from api.database import db
+from api.database import db, filter_by
 from api.exceptions.auth import admin_responses
 from api.exceptions.calendly import (
     APITokenMissingError,
@@ -17,6 +17,7 @@ from api.exceptions.calendly import (
 )
 from api.schemas.calendly import SetupEventType, WebhookData
 from api.services import calendly
+from api.services.auth import get_user_id_by_email
 from api.services.calendly import EventType
 
 
@@ -123,4 +124,13 @@ async def handle_webhook(
         response.status_code = 401
         return
 
-    print(data)
+    if data.event != "invitee.created":
+        return
+
+    student_id = await get_user_id_by_email(data.payload.email)
+    if not student_id:
+        return
+
+    # todo: find a way to get the skill_id of the exam
+    async for booked_exam in await db.stream(filter_by(models.BookedExam, user_id=student_id)):
+        booked_exam.confirmed = True
