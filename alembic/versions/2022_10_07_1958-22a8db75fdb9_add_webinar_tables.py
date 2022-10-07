@@ -26,6 +26,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=256), nullable=True),
         sa.Column("description", sa.String(length=4096), nullable=True),
         sa.Column("link", sa.String(length=256), nullable=True),
+        sa.Column("ics_token", sa.String(length=64), nullable=True),
         sa.Column("start", sa.DateTime(), nullable=True),
         sa.Column("end", sa.DateTime(), nullable=True),
         sa.Column("max_participants", sa.Integer(), nullable=True),

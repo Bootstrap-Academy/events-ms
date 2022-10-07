@@ -1,9 +1,11 @@
 """Endpoints related to webinars."""
-from datetime import datetime, timedelta
+from datetime import datetime
+from secrets import token_urlsafe
 from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response
 
 from api import models
 from api.auth import require_verified_email, user_auth
@@ -19,6 +21,7 @@ from api.exceptions.webinars import (
 )
 from api.schemas.user import User
 from api.schemas.webinars import CreateWebinar, UpdateWebinar, Webinar
+from api.services.ics import create_ics
 from api.services.shop import spend_coins
 from api.services.skills import get_completed_skills
 from api.settings import settings
@@ -95,6 +98,7 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
         name=data.name,
         description=data.description,
         link=data.link,
+        ics_token=token_urlsafe(64)[:64],
         start=datetime.fromtimestamp(data.start),
         end=datetime.fromtimestamp(data.start + data.duration * 60),
         max_participants=data.max_participants,
@@ -106,11 +110,14 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     return webinar.serialize(True)
 
 
-@router.get("/webinars/{webinar_id}/webinar.ics", include_in_schema=False)
-async def download_ics(webinar: models.Webinar = get_webinar) -> Any:
+@router.get("/webinars/{token}/webinar.ics", include_in_schema=False)
+async def download_ics(token: str) -> Any:
     """Download an ICS file for a webinar."""
 
-    return webinar.id  # todo
+    if not (webinar := await db.get(models.Webinar, ics_token=token)):
+        raise WebinarNotFoundError
+
+    return Response(create_ics(webinar), media_type="text/calendar")
 
 
 @router.get(
