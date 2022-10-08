@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import BigInteger, Column, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, relationship
 
-from api.database import Base
+from ..settings import settings
+from api.database import Base, db, db_wrapper, delete
 
 
 if TYPE_CHECKING:
@@ -46,3 +47,8 @@ class Webinar(Base):
             "price": self.price,
             "participants": len(self.participants),
         }
+
+
+@db_wrapper
+async def clean_old_webinars() -> None:
+    await db.exec(delete(Webinar).where(Webinar.end < datetime.utcnow() - timedelta(days=settings.keep_webinars_days)))

@@ -1,5 +1,4 @@
 import secrets
-from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseSettings, Field
@@ -30,6 +29,7 @@ class Settings(BaseSettings):
 
     calendar_secret: str = secrets.token_urlsafe(64)
     webinar_registration_url: str = ""
+    keep_webinars_days: int = 7
 
     public_base_url: str = "http://localhost:8000"
 
