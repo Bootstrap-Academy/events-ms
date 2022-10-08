@@ -6,7 +6,6 @@ class Webinar(BaseModel):
     skill_id: str = Field(description="ID of the skill")
     creator: str = Field(description="ID of the creator")
     creation_date: int = Field(description="Creation date")
-    ics_file: str = Field(description="URL of .ics file")
     name: str = Field(description="Name of the webinar")
     description: str = Field(description="Description of the webinar")
     link: str | None = Field(description="Link to the webinar")

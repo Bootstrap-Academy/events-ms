@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     exam_price: int = 15000  # 150€ = 15000 MC
     exam_xp: int = 500
 
+    calendar_secret: str = secrets.token_urlsafe(64)
+    webinar_registration_url: str = ""
+
     public_base_url: str = "http://localhost:8000"
 
     calendly_cache_ttl: int = 3600  # 1 hour

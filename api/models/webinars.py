@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import hmac
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import BigInteger, Column, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, relationship
 
-from ..settings import settings
 from api.database import Base
 
 
@@ -25,7 +23,6 @@ class Webinar(Base):
     name: Mapped[str] = Column(String(256))
     description: Mapped[str] = Column(String(4096))
     link: Mapped[str] = Column(String(256))
-    ics_token: Mapped[str] = Column(String(64))
     start: Mapped[datetime] = Column(DateTime)
     end: Mapped[datetime] = Column(DateTime)
     max_participants: Mapped[int] = Column(Integer)
@@ -40,7 +37,6 @@ class Webinar(Base):
             "skill_id": self.skill_id,
             "creator": self.creator,
             "creation_date": self.creation_date.timestamp(),
-            "ics_file": f"{settings.public_base_url.rstrip('/')}/webinars/{self.ics_token}/webinar.ics",
             "name": self.name,
             "description": self.description,
             "link": self.link if include_link else None,
