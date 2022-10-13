@@ -209,7 +209,7 @@ async def set_exam(skill_id: str, user: User = user_auth) -> Any:
     *Requirements:* **VERIFIED**
     """
 
-    if not {settings.examiner_skill, skill_id}.issubset(await get_completed_skills(user.id)):
+    if not user.admin and not {settings.examiner_skill, skill_id}.issubset(await get_completed_skills(user.id)):
         raise SkillRequirementsNotMetError
 
     if not await calendly.get_calendly_link(user.id):

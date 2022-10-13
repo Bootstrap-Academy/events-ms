@@ -85,7 +85,7 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     *Requirements:* **VERIFIED**
     """
 
-    if not {settings.webinar_skill, data.skill_id}.issubset(await get_completed_skills(user.id)):
+    if not user.admin and not {settings.webinar_skill, data.skill_id}.issubset(await get_completed_skills(user.id)):
         raise SkillRequirementsNotMetError
 
     now = datetime.now()
