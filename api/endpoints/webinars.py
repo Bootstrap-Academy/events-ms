@@ -20,7 +20,7 @@ from api.exceptions.webinars import (
 )
 from api.schemas.user import User
 from api.schemas.webinars import CreateWebinar, UpdateWebinar, Webinar
-from api.services.shop import spend_coins
+from api.services import shop
 from api.services.skills import get_completed_skills
 from api.settings import settings
 
@@ -132,7 +132,7 @@ async def list_webinar_participants(webinar: models.Webinar = get_webinar) -> An
     "/webinars/{webinar_id}/participants",
     dependencies=[require_verified_email],
     responses=verified_responses(
-        bool, WebinarNotFoundError, AlreadyRegisteredError, AlreadyFullError, NotEnoughCoinsError
+        Webinar, WebinarNotFoundError, AlreadyRegisteredError, AlreadyFullError, NotEnoughCoinsError
     ),
 )
 async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User = user_auth) -> Any:
@@ -148,12 +148,13 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
     if len(webinar.participants) >= webinar.max_participants:
         raise AlreadyFullError
 
-    if not await spend_coins(user.id, webinar.price):
+    if not await shop.spend_coins(user.id, webinar.price):
         raise NotEnoughCoinsError
+    await shop.add_coins(webinar.creator, int(webinar.price * (1 - settings.event_fee)))
 
     webinar.participants.append(models.WebinarParticipant(user_id=user.id, webinar_id=webinar.id))
 
-    return webinar.link
+    return webinar.serialize(True)
 
 
 @router.patch(

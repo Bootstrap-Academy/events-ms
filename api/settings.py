@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     exam_price: int = 15000  # 150€ = 15000 MC
     exam_xp: int = 500
 
+    event_fee: float = 0.3
+
     calendar_secret: str = secrets.token_urlsafe(64)
     webinar_registration_url: str = ""
     keep_webinars_days: int = 7

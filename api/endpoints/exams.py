@@ -134,6 +134,7 @@ async def book_exam(
 
     if not await shop.spend_coins(user.id, settings.exam_price):
         raise NotEnoughCoinsError
+    await shop.add_coins(exam.user_id, int(settings.exam_price * (1 - settings.event_fee)))
 
     url = await calendly.create_single_use_link(link.api_token, link.uri)
     if not url:

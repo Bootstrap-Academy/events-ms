@@ -94,6 +94,7 @@ async def book_coaching(skill_id: str, instructor: str, user: User = user_auth) 
 
     if not await shop.spend_coins(user.id, coaching.price):
         raise NotEnoughCoinsError
+    await shop.add_coins(instructor, int(coaching.price * (1 - settings.event_fee)))
 
     return await calendly.create_single_use_link(link.api_token, link.uri)
 
