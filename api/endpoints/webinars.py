@@ -47,6 +47,7 @@ async def can_manage_webinar(webinar: models.Webinar = get_webinar, user: User =
 async def list_webinars(
     skill_id: str | None = Query(None, description="Filter by skill id"),
     creator: str | None = Query(None, description="Filter by creator id"),
+    booked_only: bool = Query(False, description="Filter by whether the user has booked the webinar"),
     user: User = user_auth,
 ) -> Any:
     """
@@ -64,12 +65,13 @@ async def list_webinars(
         query = query.filter_by(creator=creator)
 
     return [
-        webinar.serialize(
-            user.admin
-            or user.id == webinar.creator
+        webinar.serialize(user.admin or booked)
+        async for webinar in await db.stream(query)
+        if (
+            booked := user.id == webinar.creator
             or any(participant.user_id == user.id for participant in webinar.participants)
         )
-        async for webinar in await db.stream(query)
+        or not booked_only
     ]
 
 
