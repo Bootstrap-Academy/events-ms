@@ -19,6 +19,7 @@ from api.services import calendly, shop
 from api.services.calendly import EventType
 from api.services.skills import complete_skill, get_completed_skills, get_lecturers, get_skill
 from api.settings import settings
+from api.utils.cache import clear_cache, redis_cached
 
 
 router = APIRouter()
@@ -59,6 +60,7 @@ async def get_exams(user: User = user_auth) -> Any:
 
 
 @router.get("/exams/{skill_id}", dependencies=[require_verified_email], responses=verified_responses(list[ExamSlot]))
+@redis_cached("exams", "skill_id")
 async def get_available_times(skill_id: str) -> Any:
     """
     Return a list of available times for an exam.
@@ -146,6 +148,8 @@ async def book_exam(
         )
     )
 
+    await clear_cache("exams")
+
     return url
 
 
@@ -220,6 +224,8 @@ async def set_exam(skill_id: str, user: User = user_auth) -> Any:
     if not exam:
         await db.add(exam := models.Exam(user_id=user.id, skill_id=skill_id))
 
+    await clear_cache("exams")
+
     return Exam(examiner=exam.user_id, skill_id=exam.skill_id, price=settings.exam_price)
 
 
@@ -238,5 +244,7 @@ async def delete_exam(skill_id: str, user: User = user_auth) -> Any:
         raise ExamNotFoundError
 
     await db.delete(exam)
+
+    await clear_cache("exams")
 
     return True

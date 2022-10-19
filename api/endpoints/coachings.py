@@ -17,6 +17,7 @@ from api.schemas.user import User
 from api.services import calendly, shop
 from api.services.skills import get_completed_skills, get_lecturers
 from api.settings import settings
+from api.utils.cache import clear_cache, redis_cached
 
 
 router = APIRouter()
@@ -39,6 +40,7 @@ async def get_coachings(user: User = user_auth) -> Any:
 @router.get(
     "/coachings/{skill_id}", dependencies=[require_verified_email], responses=verified_responses(list[CoachingSlot])
 )
+@redis_cached("coachings", "skill_id")
 async def get_available_times(skill_id: str) -> Any:
     """
     Return a list of available times for a coaching session.
@@ -96,6 +98,8 @@ async def book_coaching(skill_id: str, instructor: str, user: User = user_auth) 
         raise NotEnoughCoinsError
     await shop.add_coins(instructor, int(coaching.price * (1 - settings.event_fee)))
 
+    await clear_cache("coachings")
+
     return await calendly.create_single_use_link(link.api_token, link.uri)
 
 
@@ -123,6 +127,8 @@ async def set_coaching(data: UpdateCoaching, skill_id: str, user: User = user_au
     else:
         coaching.price = data.price
 
+    await clear_cache("coachings")
+
     return Coaching(instructor=coaching.user_id, skill_id=coaching.skill_id, price=coaching.price)
 
 
@@ -143,5 +149,7 @@ async def delete_coaching(skill_id: str, user: User = user_auth) -> Any:
         raise CoachingNotFoundError
 
     await db.delete(coaching)
+
+    await clear_cache("coachings")
 
     return True

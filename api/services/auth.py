@@ -1,14 +1,17 @@
 from typing import cast
 
 from api.services.internal import InternalService
+from api.utils.cache import redis_cached
 
 
+@redis_cached("user", "user_id")
 async def exists_user(user_id: str) -> bool:
     async with InternalService.AUTH.client as client:
         response = await client.get(f"/users/{user_id}")
         return response.status_code == 200
 
 
+@redis_cached("user", "user_id")
 async def is_admin(user_id: str) -> bool:
     async with InternalService.AUTH.client as client:
         response = await client.get(f"/users/{user_id}")
@@ -17,6 +20,7 @@ async def is_admin(user_id: str) -> bool:
         return cast(bool, response.json()["admin"])
 
 
+@redis_cached("user", "email")
 async def get_user_id_by_email(email: str) -> str | None:
     async with InternalService.AUTH.client as client:
         response = await client.get(f"/users/by_email/{email}")

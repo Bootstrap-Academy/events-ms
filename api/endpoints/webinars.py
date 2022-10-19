@@ -23,6 +23,7 @@ from api.schemas.webinars import CreateWebinar, UpdateWebinar, Webinar
 from api.services import shop
 from api.services.skills import get_completed_skills
 from api.settings import settings
+from api.utils.cache import clear_cache, redis_cached
 
 
 router = APIRouter()
@@ -44,6 +45,7 @@ async def can_manage_webinar(webinar: models.Webinar = get_webinar, user: User =
 
 
 @router.get("/webinars", dependencies=[require_verified_email], responses=verified_responses(list[Webinar]))
+@redis_cached("webinars", "skill_id", "creator", "booked_only", "user")
 async def list_webinars(
     skill_id: str | None = Query(None, description="Filter by skill id"),
     creator: str | None = Query(None, description="Filter by creator id"),
@@ -110,6 +112,8 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     )
     await db.add(webinar)
 
+    await clear_cache("webinars")
+
     return webinar.serialize(True)
 
 
@@ -156,6 +160,8 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
 
     webinar.participants.append(models.WebinarParticipant(user_id=user.id, webinar_id=webinar.id))
 
+    await clear_cache("webinars")
+
     return webinar.serialize(True)
 
 
@@ -197,6 +203,8 @@ async def update_webinar(data: UpdateWebinar, webinar: models.Webinar = get_webi
     if data.price is not None and data.price != webinar.price:
         webinar.price = data.price
 
+    await clear_cache("webinars")
+
     return webinar.serialize(True)
 
 
@@ -215,5 +223,7 @@ async def delete_webinar(webinar: models.Webinar = get_webinar) -> Any:
     """
 
     await db.delete(webinar)
+
+    await clear_cache("webinars")
 
     return True

@@ -1,6 +1,6 @@
 import hmac
 import re
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, AsyncIterator, cast
 
 from httpx import AsyncClient

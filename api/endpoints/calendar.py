@@ -14,6 +14,7 @@ from api.schemas.user import User
 from api.services.auth import is_admin
 from api.services.ics import create_ics
 from api.settings import settings
+from api.utils.cache import redis_cached
 
 
 router = APIRouter()
@@ -35,6 +36,7 @@ async def get_calendar_url(
 
 
 @router.get("/calendar/{user_id}/{token}/academy.ics", include_in_schema=False)
+@redis_cached("webinars", "user_id", "token")
 async def download_ics(user_id: str, token: str) -> Any:
     if hmac.digest(settings.calendar_secret.encode(), user_id.encode(), "sha256").hex() != token[:-1]:
         return Response(status_code=401)

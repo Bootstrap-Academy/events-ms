@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     debug: bool = False
     reload: bool = False
 
+    cache_ttl: int = 300
+
     jwt_secret: str = secrets.token_urlsafe(64)
 
     auth_url: str = ""
