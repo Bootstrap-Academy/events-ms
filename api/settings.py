@@ -38,9 +38,15 @@ class Settings(BaseSettings):
 
     public_base_url: str = "http://localhost:8000"
 
-    calendly_cache_ttl: int = 3600  # 1 hour
-
     internal_jwt_ttl: int = 10
+
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_tls: bool = False
+    smtp_starttls: bool = True
 
     database_url: str = Field(
         "mysql+aiomysql://fastapi:fastapi@mariadb:3306/fastapi",

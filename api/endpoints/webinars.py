@@ -21,9 +21,11 @@ from api.exceptions.webinars import (
 from api.schemas.user import User
 from api.schemas.webinars import CreateWebinar, UpdateWebinar, Webinar
 from api.services import shop
+from api.services.auth import get_email
 from api.services.skills import get_completed_skills
 from api.settings import settings
 from api.utils.cache import clear_cache, redis_cached
+from api.utils.email import WEBINAR_BOOKED
 
 
 router = APIRouter()
@@ -163,6 +165,11 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
 
     await clear_cache("webinars")
     await clear_cache("calendar")
+
+    if email := await get_email(user.id):
+        await WEBINAR_BOOKED.send(
+            email, title=webinar.name, datetime=webinar.start.strftime("%d.%m.%Y %H:%M"), location=webinar.link
+        )
 
     return webinar.serialize(True)
 
