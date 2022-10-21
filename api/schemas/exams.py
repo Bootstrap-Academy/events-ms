@@ -11,8 +11,8 @@ class Exam(BaseModel):
 class ExamSlot(BaseModel):
     id: str = Field(description="The ID of the exam slot")
     exam: Exam = Field(description="The exam")
-    start: float = Field(description="The start time of the slot")
-    end: float = Field(description="The end time of the slot")
+    start: int = Field(description="The start time of the slot")
+    end: int = Field(description="The end time of the slot")
 
 
 class BookedExam(ExamSlot):

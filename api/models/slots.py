@@ -7,10 +7,11 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import BigInteger, Column, DateTime, Enum, String
-from sqlalchemy.orm import Mapped
+from sqlalchemy import BigInteger, Column, DateTime, Enum, ForeignKey, String
+from sqlalchemy.orm import Mapped, relationship
 
 from api.database import Base, db, db_wrapper, select
+from api.models.weekly_slots import WeeklySlot
 from api.services import shop
 
 
@@ -32,6 +33,8 @@ class Slot(Base):
     instructor_coins: Mapped[int | None] = Column(BigInteger, nullable=True)
     skill_id: Mapped[str | None] = Column(String(256), nullable=True)
     meeting_link: Mapped[str | None] = Column(String(256), nullable=True)
+    weekly_slot_id: Mapped[str | None] = Column(String(36), ForeignKey("events_weekly_slots.id"), nullable=True)
+    weekly_slot: Mapped[WeeklySlot | None] = relationship("WeeklySlot", back_populates="slots", lazy="selectin")
 
     @property
     def booked(self) -> bool:
@@ -54,6 +57,7 @@ class Slot(Base):
             instructor_coins=None,
             skill_id=None,
             meeting_link=None,
+            weekly_slot_id=None,
         )
         await db.add(slot)
         return slot
@@ -94,4 +98,6 @@ async def clean_old_slots() -> None:
             await shop.add_coins(slot.user_id, slot.instructor_coins)
         await db.delete(slot)
 
-    # todo: create from weekly slots (1 month)
+    weekly_slot: WeeklySlot
+    async for weekly_slot in await db.stream(select(WeeklySlot)):
+        await weekly_slot.create_slots()

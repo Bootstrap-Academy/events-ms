@@ -33,5 +33,5 @@ class UpdateCoaching(BaseModel):
 class CoachingSlot(BaseModel):
     id: str = Field(description="The ID of the coaching slot")
     coaching: PublicCoaching = Field(description="The coaching")
-    start: float = Field(description="The start time of the slot")
-    end: float = Field(description="The end time of the slot")
+    start: int = Field(description="The start time of the slot")
+    end: int = Field(description="The end time of the slot")

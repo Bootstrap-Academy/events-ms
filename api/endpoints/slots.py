@@ -1,14 +1,14 @@
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any
 
 from fastapi import APIRouter, Body
 
 from api import models
 from api.auth import get_user, require_verified_email
-from api.database import db, select
+from api.database import db, filter_by
 from api.exceptions.auth import admin_responses
 from api.exceptions.slots import SlotBookedException, SlotNotFoundException
-from api.schemas.slots import CreateSlot, Slot
+from api.schemas.slots import CreateSlot, CreateWeeklySlot, Slot, WeeklySlot
 from api.utils.cache import clear_cache
 
 
@@ -23,7 +23,7 @@ async def get_slots(user_id: str = get_user(require_self_or_admin=True)) -> Any:
     *Requirements:* **VERIFIED** and (**SELF** or **ADMIN**)
     """
 
-    return [slot.serialize async for slot in await db.stream(select(models.Slot).filter_by(user_id=user_id))]
+    return [slot.serialize async for slot in await db.stream(filter_by(models.Slot, user_id=user_id))]
 
 
 @router.post("/slots/{user_id}", dependencies=[require_verified_email], responses=admin_responses(list[Slot]))
@@ -55,7 +55,7 @@ async def add_slots(
     dependencies=[require_verified_email],
     responses=admin_responses(bool, SlotNotFoundException, SlotBookedException),
 )
-async def delete_slot(slot_id: int, user_id: str = get_user(require_self_or_admin=True)) -> Any:
+async def delete_slot(slot_id: str, user_id: str = get_user(require_self_or_admin=True)) -> Any:
     """
     Delete a slot for the user.
 
@@ -76,4 +76,63 @@ async def delete_slot(slot_id: int, user_id: str = get_user(require_self_or_admi
     return True
 
 
-# todo: weekly slots
+@router.get(
+    "/slots/{user_id}/weekly", dependencies=[require_verified_email], responses=admin_responses(list[WeeklySlot])
+)
+async def get_weekly_slots(user_id: str = get_user(require_self_or_admin=True)) -> Any:
+    """
+    Return the rules for creating slots on a weekly basis for the user.
+
+    *Requirements:* **VERIFIED** and (**SELF** or **ADMIN**)
+    """
+
+    slot: models.WeeklySlot
+    return [slot.serialize for slot in await db.all(filter_by(models.WeeklySlot, user_id=user_id))]
+
+
+@router.post("/slots/{user_id}/weekly", dependencies=[require_verified_email], responses=admin_responses(WeeklySlot))
+async def add_weekly_slot(data: CreateWeeklySlot, user_id: str = get_user(require_self_or_admin=True)) -> Any:
+    """
+    Add a rule for creating slots on a weekly basis for the user.
+
+    *Requirements:* **VERIFIED** and (**SELF** or **ADMIN**)
+    """
+
+    return (
+        await models.WeeklySlot.create(
+            user_id, data.weekday, time(*divmod(data.start, 60)), time(*divmod(data.end, 60))
+        )
+    ).serialize
+
+
+@router.delete(
+    "/slots/{user_id}/weekly/{slot_id}",
+    dependencies=[require_verified_email],
+    responses=admin_responses(bool, SlotNotFoundException),
+)
+async def delete_weekly_slot(slot_id: str, user_id: str = get_user(require_self_or_admin=True)) -> Any:
+    """
+    Delete a rule for creating slots on a weekly basis for the user.
+
+    *Requirements:* **VERIFIED** and (**SELF** or **ADMIN**)
+    """
+
+    slot = await db.get(models.WeeklySlot, user_id=user_id, id=slot_id)
+    if not slot:
+        raise SlotNotFoundException
+
+    booked = False
+    for s in [*slot.slots]:
+        if s.booked:
+            booked = True
+            s.weekly_slot = None
+            s.weekly_slot_id = None
+        else:
+            await db.delete(s)
+
+    await db.delete(slot)
+
+    if booked:
+        await clear_cache("calendar")
+
+    return True

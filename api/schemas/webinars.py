@@ -22,7 +22,7 @@ class CreateWebinar(BaseModel):
     description: str = Field(description="Description of the webinar")
     link: str = Field(description="Link to the webinar")
     start: int = Field(description="Start date")
-    duration: int = Field(gt=0, description="Duration of the webinar in minutes")
+    duration: int = Field(gt=0, lt=24 * 60, description="Duration of the webinar in minutes")
     max_participants: int = Field(gt=0, description="Maximum number of participants")
     price: int = Field(ge=0, description="Price of the webinar")
 
