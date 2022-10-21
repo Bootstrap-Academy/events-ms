@@ -15,6 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .database import db, db_context
 from .endpoints import ROUTER, TAGS
 from .logger import get_logger, setup_sentry
+from .models.slots import clean_old_slots
 from .models.webinars import clean_old_webinars
 from .settings import settings
 from .utils.debug import check_responses
@@ -68,10 +69,11 @@ async def rollback_on_exception(request: Request, exc: HTTPException) -> Respons
     return await http_exception_handler(request, exc)
 
 
-async def clean_old_webinars_loop() -> None:
+async def cleanup_loop() -> None:
     while True:
         try:
             await clean_old_webinars()
+            await clean_old_slots()
         except Exception as e:
             logger.exception(e)
         await asyncio.sleep(20 * 60)
@@ -81,7 +83,7 @@ async def clean_old_webinars_loop() -> None:
 async def on_startup() -> None:
     setup_app()
 
-    asyncio.create_task(clean_old_webinars_loop())
+    asyncio.create_task(cleanup_loop())
 
 
 @app.on_event("shutdown")

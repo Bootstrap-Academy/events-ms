@@ -7,6 +7,7 @@ from api.utils.cache import redis_cached
 
 class Skill(BaseModel):
     id: str
+    name: str
     dependencies: set[str]
 
     class Config:

@@ -15,6 +15,8 @@ def redis_cached(
     prefix: str, *key: str, ttl: int = settings.cache_ttl
 ) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
     def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
+        if settings.cache_ttl <= 0:
+            return func
 
         pos_cnt = 0
         param_indices: dict[str, int] = {}

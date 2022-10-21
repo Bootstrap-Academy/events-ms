@@ -1,6 +1,6 @@
 """Endpoints related to 1-on-1 coachings"""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter
@@ -9,12 +9,13 @@ from api import models
 from api.auth import require_verified_email, user_auth
 from api.database import db, filter_by
 from api.exceptions.auth import verified_responses
-from api.exceptions.calendly import CalendlyNotConfiguredError
-from api.exceptions.coaching import CoachingNotFoundError, NotEnoughCoinsError
+from api.exceptions.coaching import CannotBookOwnCoachingError, CoachingNotFoundError, NotEnoughCoinsError
 from api.exceptions.skills import SkillRequirementsNotMetError
-from api.schemas.coachings import Coaching, CoachingSlot, UpdateCoaching
+from api.models.slots import EventType
+from api.schemas.coachings import Coaching, CoachingSlot, PublicCoaching, UpdateCoaching
 from api.schemas.user import User
-from api.services import calendly, shop
+from api.services import shop
+from api.services.auth import get_instructor
 from api.services.skills import get_completed_skills, get_lecturers
 from api.settings import settings
 from api.utils.cache import clear_cache, redis_cached
@@ -32,7 +33,7 @@ async def get_coachings(user: User = user_auth) -> Any:
     """
 
     return [
-        Coaching(instructor=coaching.user_id, skill_id=coaching.skill_id, price=coaching.price)
+        Coaching(skill_id=coaching.skill_id, price=coaching.price)
         async for coaching in await db.stream(filter_by(models.Coaching, user_id=user.id))
     ]
 
@@ -40,8 +41,8 @@ async def get_coachings(user: User = user_auth) -> Any:
 @router.get(
     "/coachings/{skill_id}", dependencies=[require_verified_email], responses=verified_responses(list[CoachingSlot])
 )
-@redis_cached("coachings", "skill_id")
-async def get_available_times(skill_id: str) -> Any:
+@redis_cached("calendar", "skill_id")
+async def get_slots(skill_id: str) -> Any:
     """
     Return a list of available times for a coaching session.
 
@@ -49,25 +50,28 @@ async def get_available_times(skill_id: str) -> Any:
     """
 
     out = []
-    for instructor in await get_lecturers({skill_id, settings.coaching_skill}):
-        link = await db.get(models.CalendlyLink, user_id=instructor)
-        if not link:
-            continue
-
-        coaching = await db.get(models.Coaching, user_id=instructor, skill_id=skill_id)
+    instructor_id: str
+    for instructor_id in await get_lecturers({skill_id, settings.coaching_skill}):
+        coaching = await db.get(models.Coaching, user_id=instructor_id, skill_id=skill_id)
         if not coaching:
             continue
 
-        event_type = await calendly.fetch_event_type(link.api_token, link.uri)
-        if not event_type:
+        instructor = await get_instructor(instructor_id)
+        if not instructor:
             continue
 
-        for slot in await calendly.fetch_available_slots(link.api_token, link.uri) or []:
+        slot: models.Slot
+        async for slot in await db.stream(
+            filter_by(models.Slot, user_id=instructor_id, booked_by=None).where(
+                models.Slot.start >= datetime.now() + timedelta(days=1)
+            )
+        ):
             out.append(
                 CoachingSlot(
-                    coaching=Coaching(instructor=instructor, skill_id=skill_id, price=coaching.price),
-                    start=slot,
-                    end=slot + timedelta(minutes=event_type.duration),
+                    id=slot.id,
+                    coaching=PublicCoaching(instructor=instructor, skill_id=skill_id, price=coaching.price),
+                    start=slot.start.timestamp(),
+                    end=slot.end.timestamp(),
                 )
             )
 
@@ -75,38 +79,52 @@ async def get_available_times(skill_id: str) -> Any:
 
 
 @router.post(
-    "/coachings/{skill_id}/{instructor}",
+    "/coachings/{skill_id}/{slot_id}",
     dependencies=[require_verified_email],
-    responses=verified_responses(str, CoachingNotFoundError, NotEnoughCoinsError),
+    responses=verified_responses(CoachingSlot, CoachingNotFoundError, NotEnoughCoinsError, CannotBookOwnCoachingError),
 )
-async def book_coaching(skill_id: str, instructor: str, user: User = user_auth) -> Any:
+async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> Any:
     """
     Book a coaching session.
 
     *Requirements:* **VERIFIED**
     """
 
-    coaching = await db.get(models.Coaching, user_id=instructor, skill_id=skill_id)
+    slot = await db.get(models.Slot, id=slot_id, booked_by=None)
+    if not slot or slot.start - datetime.now() < timedelta(days=1):
+        raise CoachingNotFoundError
+
+    if slot.user_id == user.id:
+        raise CannotBookOwnCoachingError
+
+    coaching = await db.get(models.Coaching, user_id=slot.user_id)
     if not coaching:
         raise CoachingNotFoundError
 
-    link = await db.get(models.CalendlyLink, user_id=instructor)
-    if not link:
+    instructor = await get_instructor(slot.user_id)
+    if not instructor:
         raise CoachingNotFoundError
 
     if not await shop.spend_coins(user.id, coaching.price):
         raise NotEnoughCoinsError
-    await shop.add_coins(instructor, int(coaching.price * (1 - settings.event_fee)))
 
-    await clear_cache("coachings")
+    slot.book(user.id, EventType.COACHING, coaching.price, int(coaching.price * (1 - settings.event_fee)), skill_id)
+    # todo: email
 
-    return await calendly.create_single_use_link(link.api_token, link.uri)
+    await clear_cache("calendar")
+
+    return CoachingSlot(
+        id=slot.id,
+        coaching=PublicCoaching(instructor=instructor, skill_id=skill_id, price=coaching.price),
+        start=slot.start.timestamp(),
+        end=slot.end.timestamp(),
+    )
 
 
 @router.put(
     "/coachings/{skill_id}",
     dependencies=[require_verified_email],
-    responses=verified_responses(Coaching, SkillRequirementsNotMetError, CalendlyNotConfiguredError),
+    responses=verified_responses(Coaching, SkillRequirementsNotMetError),
 )
 async def set_coaching(data: UpdateCoaching, skill_id: str, user: User = user_auth) -> Any:
     """
@@ -118,18 +136,15 @@ async def set_coaching(data: UpdateCoaching, skill_id: str, user: User = user_au
     if not user.admin and not {settings.coaching_skill, skill_id}.issubset(await get_completed_skills(user.id)):
         raise SkillRequirementsNotMetError
 
-    if not await calendly.get_calendly_link(user.id):
-        raise CalendlyNotConfiguredError
-
     coaching = await db.get(models.Coaching, user_id=user.id, skill_id=skill_id)
     if not coaching:
         await db.add(coaching := models.Coaching(user_id=user.id, skill_id=skill_id, price=data.price))
     else:
         coaching.price = data.price
 
-    await clear_cache("coachings")
+    await clear_cache("calendar")
 
-    return Coaching(instructor=coaching.user_id, skill_id=coaching.skill_id, price=coaching.price)
+    return Coaching(skill_id=coaching.skill_id, price=coaching.price)
 
 
 @router.delete(
@@ -150,6 +165,6 @@ async def delete_coaching(skill_id: str, user: User = user_auth) -> Any:
 
     await db.delete(coaching)
 
-    await clear_cache("coachings")
+    await clear_cache("calendar")
 
     return True

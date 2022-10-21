@@ -1,22 +1,24 @@
 """Endpoints related to exams"""
+
 import random
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, AsyncIterator, Coroutine
 
 from fastapi import APIRouter, Body, Query
+from sqlalchemy import asc
 
 from api import models
 from api.auth import require_verified_email, user_auth
 from api.database import db, filter_by
 from api.exceptions.auth import verified_responses
-from api.exceptions.calendly import CalendlyNotConfiguredError
 from api.exceptions.coaching import NotEnoughCoinsError
 from api.exceptions.exams import ExamAlreadyBookedError, ExamAlreadyPassedError, ExamNotFoundError
 from api.exceptions.skills import SkillNotFoundError, SkillRequirementsNotMetError
+from api.models.slots import EventType
 from api.schemas.exams import BookedExam, Exam, ExamSlot
 from api.schemas.user import User
-from api.services import calendly, shop
-from api.services.calendly import EventType
+from api.services import shop
+from api.services.auth import get_instructor
 from api.services.skills import complete_skill, get_completed_skills, get_lecturers, get_skill
 from api.settings import settings
 from api.utils.cache import clear_cache, redis_cached
@@ -25,22 +27,23 @@ from api.utils.cache import clear_cache, redis_cached
 router = APIRouter()
 
 
-async def get_examiners(skill_id: str) -> list[tuple[models.CalendlyLink, models.Exam, EventType, list[datetime]]]:
+async def get_examiners(skill_id: str) -> list[tuple[models.Exam, Coroutine[None, None, AsyncIterator[models.Slot]]]]:
     out = []
     for examiner in await get_lecturers({skill_id, settings.examiner_skill}):
-        link = await db.get(models.CalendlyLink, user_id=examiner)
-        if not link:
-            continue
-
         exam = await db.get(models.Exam, user_id=examiner, skill_id=skill_id)
         if not exam:
             continue
 
-        event_type = await calendly.fetch_event_type(link.api_token, link.uri)
-        if not event_type:
-            continue
-
-        out.append((link, exam, event_type, await calendly.fetch_available_slots(link.api_token, link.uri) or []))
+        out.append(
+            (
+                exam,
+                db.stream(
+                    filter_by(models.Slot, user_id=examiner, booked_by=None).where(
+                        models.Slot.start - datetime.now() >= timedelta(days=1)
+                    )
+                ),
+            )
+        )
 
     return out
 
@@ -54,14 +57,14 @@ async def get_exams(user: User = user_auth) -> Any:
     """
 
     return [
-        Exam(examiner=exam.user_id, skill_id=exam.skill_id, price=settings.exam_price)
+        Exam(skill_id=exam.skill_id, price=settings.exam_price)
         async for exam in await db.stream(filter_by(models.Exam, user_id=user.id))
     ]
 
 
 @router.get("/exams/{skill_id}", dependencies=[require_verified_email], responses=verified_responses(list[ExamSlot]))
-@redis_cached("exams", "skill_id")
-async def get_available_times(skill_id: str) -> Any:
+@redis_cached("calendar", "skill_id")
+async def get_slots(skill_id: str) -> Any:
     """
     Return a list of available times for an exam.
 
@@ -69,10 +72,15 @@ async def get_available_times(skill_id: str) -> Any:
     """
 
     out = []
-    for (*_, event_type, slots) in await get_examiners(skill_id):
-        for slot in slots:
+    for exam, slots in await get_examiners(skill_id):
+        async for slot in await slots:
             out.append(
-                ExamSlot(price=settings.exam_price, start=slot, end=slot + timedelta(minutes=event_type.duration))
+                ExamSlot(
+                    id=slot.id,
+                    exam=Exam(skill_id=exam.skill_id, price=settings.exam_price),
+                    start=slot.start.timestamp(),
+                    end=slot.end.timestamp(),
+                )
             )
 
     return out
@@ -82,7 +90,7 @@ async def get_available_times(skill_id: str) -> Any:
     "/exams/{skill_id}",
     dependencies=[require_verified_email],
     responses=verified_responses(
-        str,
+        ExamSlot,
         ExamNotFoundError,
         SkillNotFoundError,
         ExamAlreadyBookedError,
@@ -100,16 +108,10 @@ async def book_exam(
     """
     Book an exam session.
 
-    Note that the email address the user enters on the calendly page MUST match the email address of the user.
-    Otherwise, the examiner cannot grade the exam.
-
     *Requirements:* **VERIFIED**
     """
 
-    if row := await db.get(models.BookedExam, user_id=user.id, skill_id=skill_id):
-        if not row.confirmed:
-            return row.calendly_link
-
+    if await db.exists(filter_by(models.Slot, booked_by=user.id, event_type=EventType.EXAM, skill_id=skill_id)):
         raise ExamAlreadyBookedError
 
     if not (skill := await get_skill(skill_id)):
@@ -122,35 +124,32 @@ async def book_exam(
     if not skill.dependencies.issubset(completed_skills):
         raise SkillRequirementsNotMetError
 
-    examiners: list[tuple[models.CalendlyLink, models.Exam]] = []
-    for (link, exam, event_type, slots) in await get_examiners(skill_id):
-        for slot in slots:
-            if (not start or start <= slot) and (not end or slot + timedelta(minutes=event_type.duration) <= end):
-                examiners.append((link, exam))
-                break
+    slots: list[models.Slot] = []
+    for _, _slots in await get_examiners(skill_id):
+        async for slot in await _slots:
+            if (not start or start <= slot.start) and (not end or slot.end <= end):
+                slots.append(slot)
 
-    if not examiners:
+    if not slots:
         raise ExamNotFoundError
 
-    link, exam = random.choice(examiners)  # noqa: S311
+    slot = random.choice(slots)  # noqa: S311
 
     if not await shop.spend_coins(user.id, settings.exam_price):
         raise NotEnoughCoinsError
-    await shop.add_coins(exam.user_id, int(settings.exam_price * (1 - settings.event_fee)))
 
-    url = await calendly.create_single_use_link(link.api_token, link.uri)
-    if not url:
-        raise ExamNotFoundError
-
-    await db.add(
-        models.BookedExam(
-            user_id=user.id, skill_id=skill_id, examiner_id=exam.user_id, confirmed=False, calendly_link=url
-        )
+    slot.book(
+        user.id, EventType.EXAM, settings.exam_price, int(settings.exam_price * (1 - settings.event_fee)), skill_id
     )
 
-    await clear_cache("exams")
+    await clear_cache("calendar")
 
-    return url
+    return ExamSlot(
+        id=slot.id,
+        exam=Exam(skill_id=skill_id, price=settings.exam_price),
+        start=slot.start.timestamp(),
+        end=slot.end.timestamp(),
+    )
 
 
 @router.get(
@@ -164,23 +163,30 @@ async def get_pending_exams(skill_id: str, user: User = user_auth) -> Any:
     """
 
     return [
-        BookedExam(user_id=exam.user_id, skill_id=exam.skill_id, examiner_id=exam.examiner_id)
-        async for exam in await db.stream(
-            filter_by(models.BookedExam, examiner_id=user.id, skill_id=skill_id, confirmed=True)
+        BookedExam(
+            id=slot.id,
+            exam=Exam(skill_id=slot.skill_id, price=settings.exam_price),
+            start=slot.start.timestamp(),
+            end=slot.end.timestamp(),
+            student=await get_instructor(slot.booked_by),
+        )
+        async for slot in await db.stream(
+            filter_by(models.Slot, user_id=user.id, event_type=EventType.EXAM, skill_id=skill_id)
+            .where(models.Slot.booked_by != None)  # noqa
+            .order_by(asc(models.Slot.start))
         )
     ]
 
 
 @router.put(
-    "/exams/{skill_id}/{user_id}",
+    "/exams/{slot_id}/grade",
     dependencies=[require_verified_email],
     responses=verified_responses(bool, ExamNotFoundError),
 )
 async def grade_exam(
     *,
     passed: bool = Body(embed=True, description="Whether the user passed the exam"),
-    skill_id: str,
-    user_id: str,
+    slot_id: str,
     user: User = user_auth,
 ) -> Any:
     """
@@ -189,15 +195,17 @@ async def grade_exam(
     *Requirements:* **VERIFIED**
     """
 
-    booked_exam = await db.get(
-        models.BookedExam, user_id=user_id, skill_id=skill_id, examiner_id=user.id, confirmed=True
-    )
-    if not booked_exam:
+    slot = await db.get(models.Slot, id=slot_id, user_id=user.id, event_type=EventType.EXAM)
+    if not slot or not slot.booked_by or not slot.skill_id or not slot.instructor_coins or datetime.now() < slot.start:
         raise ExamNotFoundError
 
-    await db.delete(booked_exam)
+    await db.delete(slot)
     if passed:
-        await complete_skill(user_id, skill_id)
+        await complete_skill(slot.booked_by, slot.skill_id)
+
+    await shop.add_coins(user.id, slot.instructor_coins)
+
+    await clear_cache("calendar")
 
     return True
 
@@ -205,7 +213,7 @@ async def grade_exam(
 @router.put(
     "/exams/{skill_id}",
     dependencies=[require_verified_email],
-    responses=verified_responses(Exam, SkillRequirementsNotMetError, CalendlyNotConfiguredError),
+    responses=verified_responses(Exam, SkillRequirementsNotMetError),
 )
 async def set_exam(skill_id: str, user: User = user_auth) -> Any:
     """
@@ -217,16 +225,13 @@ async def set_exam(skill_id: str, user: User = user_auth) -> Any:
     if not user.admin and not {settings.examiner_skill, skill_id}.issubset(await get_completed_skills(user.id)):
         raise SkillRequirementsNotMetError
 
-    if not await calendly.get_calendly_link(user.id):
-        raise CalendlyNotConfiguredError
-
     exam = await db.get(models.Exam, user_id=user.id, skill_id=skill_id)
     if not exam:
         await db.add(exam := models.Exam(user_id=user.id, skill_id=skill_id))
 
-    await clear_cache("exams")
+    await clear_cache("calendar")
 
-    return Exam(examiner=exam.user_id, skill_id=exam.skill_id, price=settings.exam_price)
+    return Exam(skill_id=exam.skill_id, price=settings.exam_price)
 
 
 @router.delete(
@@ -245,6 +250,6 @@ async def delete_exam(skill_id: str, user: User = user_auth) -> Any:
 
     await db.delete(exam)
 
-    await clear_cache("exams")
+    await clear_cache("calendar")
 
     return True

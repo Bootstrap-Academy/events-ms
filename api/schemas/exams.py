@@ -1,21 +1,19 @@
-from datetime import datetime
-
 from pydantic import BaseModel, Field
+
+from api.schemas.coachings import Instructor
 
 
 class Exam(BaseModel):
-    examiner: str = Field(description="The ID of the examiner")
     skill_id: str = Field(description="The ID of the skill")
     price: int = Field(description="The price of the exam")
-
-
-class BookedExam(BaseModel):
-    user_id: str = Field(description="The ID of the user")
-    skill_id: str = Field(description="The ID of the skill")
-    examiner_id: str = Field(description="The ID of the examiner")
 
 
 class ExamSlot(BaseModel):
-    price: int = Field(description="The price of the exam")
-    start: datetime = Field(description="The start time of the slot")
-    end: datetime = Field(description="The end time of the slot")
+    id: str = Field(description="The ID of the exam slot")
+    exam: Exam = Field(description="The exam")
+    start: float = Field(description="The start time of the slot")
+    end: float = Field(description="The end time of the slot")
+
+
+class BookedExam(ExamSlot):
+    student: Instructor = Field(description="The ID of the student")
