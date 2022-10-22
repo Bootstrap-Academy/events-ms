@@ -33,7 +33,6 @@ class Settings(BaseSettings):
 
     calendar_secret: str = secrets.token_urlsafe(64)
     webinar_registration_url: str = ""
-    keep_webinars_days: int = 7
     event_cancel_url: str = ""
 
     public_base_url: str = "http://localhost:8000"

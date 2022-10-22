@@ -51,4 +51,4 @@ class Webinar(Base):
 
 @db_wrapper
 async def clean_old_webinars() -> None:
-    await db.exec(delete(Webinar).where(Webinar.end < datetime.utcnow() - timedelta(days=settings.keep_webinars_days)))
+    await db.exec(delete(Webinar).where(Webinar.end < datetime.utcnow()))

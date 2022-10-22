@@ -62,7 +62,7 @@ async def list_webinars(
     *Requirements:* **VERIFIED**
     """
 
-    query = select(models.Webinar)
+    query = select(models.Webinar).where(models.Webinar.end > datetime.now())
     if skill_id:
         query = query.filter_by(skill_id=skill_id)
     if creator:
@@ -150,6 +150,9 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
 
     *Requirements:* **VERIFIED**
     """
+
+    if webinar.start < datetime.now():
+        raise WebinarNotFoundError
 
     if user.id == webinar.creator or any(participant.user_id == user.id for participant in webinar.participants):
         raise AlreadyRegisteredError
