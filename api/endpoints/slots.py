@@ -46,7 +46,7 @@ async def add_slots(
             )
         ).serialize
         for slot in slots
-        if slot.start + 60 * slot.duration > now
+        if slot.start > now
     ]
 
 
