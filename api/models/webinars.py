@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import BigInteger, Column, DateTime, Integer, String
+from sqlalchemy import BigInteger, Column, Integer, String
 from sqlalchemy.orm import Mapped, relationship
 
+from ..database.database import UTCDateTime
+from ..utils.utc import utcnow
 from api.database import Base, db, db_wrapper, select
 
 
@@ -19,12 +21,12 @@ class Webinar(Base):
     id: Mapped[str] = Column(String(36), primary_key=True, unique=True)
     skill_id: Mapped[str] = Column(String(256))
     creator: Mapped[str] = Column(String(36))
-    creation_date: Mapped[datetime] = Column(DateTime)
+    creation_date: Mapped[datetime] = Column(UTCDateTime)
     name: Mapped[str] = Column(String(256))
     description: Mapped[str] = Column(String(4096))
     link: Mapped[str] = Column(String(256))
-    start: Mapped[datetime] = Column(DateTime)
-    end: Mapped[datetime] = Column(DateTime)
+    start: Mapped[datetime] = Column(UTCDateTime)
+    end: Mapped[datetime] = Column(UTCDateTime)
     max_participants: Mapped[int] = Column(Integer)
     price: Mapped[int] = Column(BigInteger)
     participants: list[WebinarParticipant] = relationship(
@@ -50,5 +52,5 @@ class Webinar(Base):
 
 @db_wrapper
 async def clean_old_webinars() -> None:
-    async for webinar in await db.stream(select(Webinar).where(Webinar.end < datetime.now())):
+    async for webinar in await db.stream(select(Webinar).where(Webinar.end < utcnow())):
         await db.delete(webinar)

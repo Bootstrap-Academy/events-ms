@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import time
 from typing import Any
 
 from fastapi import APIRouter, Body
@@ -10,6 +10,7 @@ from api.exceptions.auth import admin_responses
 from api.exceptions.slots import SlotBookedException, SlotNotFoundException
 from api.schemas.slots import CreateSlot, CreateWeeklySlot, Slot, WeeklySlot
 from api.utils.cache import clear_cache
+from api.utils.utc import utcfromtimestamp, utcnow
 
 
 router = APIRouter()
@@ -38,11 +39,11 @@ async def add_slots(
 
     await clear_cache("calendar")
 
-    now = datetime.now().timestamp()
+    now = utcnow().timestamp()
     return [
         (
             await models.Slot.create(
-                user_id, datetime.fromtimestamp(slot.start), datetime.fromtimestamp(slot.start + 60 * slot.duration)
+                user_id, utcfromtimestamp(slot.start), utcfromtimestamp(slot.start + 60 * slot.duration)
             )
         ).serialize
         for slot in slots

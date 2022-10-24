@@ -1,7 +1,7 @@
 """Endpoints related to the calendar."""
 
 import hmac
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, cast
 
 from fastapi import APIRouter
@@ -21,6 +21,7 @@ from api.services.ics import create_ics
 from api.services.skills import get_skills
 from api.settings import settings
 from api.utils.cache import clear_cache, redis_cached
+from api.utils.utc import utcnow
 
 
 router = APIRouter()
@@ -168,7 +169,7 @@ async def cancel_event(event_id: str, user: User = user_auth) -> Any:
     if user.id != slot.user_id and user.id != slot.booked_by and not user.admin:
         raise SlotNotFoundException
 
-    delta = slot.start - datetime.now()
+    delta = slot.start - utcnow()
     if user.id == slot.booked_by and not user.admin and delta < timedelta(0):
         raise PermissionDeniedError
     if user.id == slot.user_id and not user.admin and delta < timedelta(days=1):

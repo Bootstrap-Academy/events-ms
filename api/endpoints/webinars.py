@@ -26,6 +26,7 @@ from api.services.skills import get_completed_skills
 from api.settings import settings
 from api.utils.cache import clear_cache, redis_cached
 from api.utils.email import WEBINAR_BOOKED
+from api.utils.utc import utcfromtimestamp, utcnow
 
 
 router = APIRouter()
@@ -62,7 +63,7 @@ async def list_webinars(
     *Requirements:* **VERIFIED**
     """
 
-    query = select(models.Webinar).where(models.Webinar.end > datetime.now())
+    query = select(models.Webinar).where(models.Webinar.end > utcnow())
     if skill_id:
         query = query.filter_by(skill_id=skill_id)
     if creator:
@@ -94,7 +95,7 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     if not user.admin and not {settings.webinar_skill, data.skill_id}.issubset(await get_completed_skills(user.id)):
         raise SkillRequirementsNotMetError
 
-    now = datetime.now()
+    now = utcnow()
     if data.start <= now.timestamp():
         raise CannotStartInPastError
 
@@ -106,8 +107,8 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
         name=data.name,
         description=data.description,
         link=data.link,
-        start=datetime.fromtimestamp(data.start),
-        end=datetime.fromtimestamp(data.start + data.duration * 60),
+        start=utcfromtimestamp(data.start),
+        end=utcfromtimestamp(data.start + data.duration * 60),
         max_participants=data.max_participants,
         price=data.price,
         participants=[],
@@ -151,7 +152,7 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
     *Requirements:* **VERIFIED**
     """
 
-    if webinar.start < datetime.now():
+    if webinar.start < utcnow():
         raise WebinarNotFoundError
 
     if user.id == webinar.creator or any(participant.user_id == user.id for participant in webinar.participants):
@@ -201,13 +202,13 @@ async def update_webinar(data: UpdateWebinar, webinar: models.Webinar = get_webi
         webinar.link = data.link
 
     if data.start is not None and data.start != webinar.start.timestamp():
-        if data.start <= datetime.now().timestamp():
+        if data.start <= utcnow().timestamp():
             raise CannotStartInPastError
-        webinar.end += datetime.fromtimestamp(data.start) - webinar.start
-        webinar.start = datetime.fromtimestamp(data.start)
+        webinar.end += utcfromtimestamp(data.start) - webinar.start
+        webinar.start = utcfromtimestamp(data.start)
 
     if data.duration is not None:
-        webinar.end = datetime.fromtimestamp(webinar.start.timestamp() + data.duration * 60)
+        webinar.end = utcfromtimestamp(webinar.start.timestamp() + data.duration * 60)
 
     if data.max_participants is not None and data.max_participants != webinar.max_participants:
         webinar.max_participants = data.max_participants

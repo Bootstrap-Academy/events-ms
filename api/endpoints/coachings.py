@@ -1,6 +1,6 @@
 """Endpoints related to 1-on-1 coachings"""
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter
@@ -19,6 +19,7 @@ from api.services.auth import get_instructor
 from api.services.skills import get_completed_skills, get_lecturers
 from api.settings import settings
 from api.utils.cache import clear_cache, redis_cached
+from api.utils.utc import utcnow
 
 
 router = APIRouter()
@@ -63,7 +64,7 @@ async def get_slots(skill_id: str) -> Any:
         slot: models.Slot
         async for slot in await db.stream(
             filter_by(models.Slot, user_id=instructor_id, booked_by=None).where(
-                models.Slot.start >= datetime.now() + timedelta(days=1)
+                models.Slot.start >= utcnow() + timedelta(days=1)
             )
         ):
             out.append(
@@ -91,7 +92,7 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
     """
 
     slot = await db.get(models.Slot, id=slot_id, booked_by=None)
-    if not slot or slot.start - datetime.now() < timedelta(days=1):
+    if not slot or slot.start - utcnow() < timedelta(days=1):
         raise CoachingNotFoundError
 
     if slot.user_id == user.id:

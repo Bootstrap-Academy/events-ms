@@ -1,7 +1,6 @@
 import re
 from datetime import datetime, timedelta
 from typing import Any, cast
-from unittest.mock import MagicMock
 
 import jwt as _jwt
 import pytest
@@ -23,7 +22,7 @@ from api.utils import jwt
 async def test__jwt_encode(
     data: dict[str, Any], now: int, ttl: int, expected: dict[str, Any], mocker: MockerFixture, monkeypatch: MonkeyPatch
 ) -> None:
-    mocker.patch("api.utils.jwt.datetime", MagicMock(utcnow=lambda: datetime.utcfromtimestamp(now)))
+    mocker.patch("api.utils.jwt.utcnow", lambda: datetime.utcfromtimestamp(now))
     monkeypatch.setattr(settings, "jwt_secret", "My JWT secret")
 
     token = jwt.encode_jwt(data, timedelta(seconds=ttl))

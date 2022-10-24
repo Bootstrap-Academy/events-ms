@@ -4,9 +4,11 @@ from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from sqlalchemy import Column, DateTime, SmallInteger, String, Time
+from sqlalchemy import Column, SmallInteger, String, Time
 from sqlalchemy.orm import Mapped, relationship
 
+from ..database.database import UTCDateTime
+from ..utils.utc import utcnow
 from api.database import Base, db
 
 
@@ -23,7 +25,7 @@ class WeeklySlot(Base):
     start: Mapped[time] = Column(Time)
     end: Mapped[time] = Column(Time)
     slots: list[Slot] = relationship("Slot", back_populates="weekly_slot", lazy="selectin")
-    last_slot: Mapped[datetime] = Column(DateTime)
+    last_slot: Mapped[datetime] = Column(UTCDateTime)
 
     @property
     def serialize(self) -> dict[str, Any]:
@@ -36,7 +38,7 @@ class WeeklySlot(Base):
 
     @classmethod
     async def create(cls, user_id: str, weekday: int, start: time, end: time) -> WeeklySlot:
-        slot = cls(id=str(uuid4()), user_id=user_id, weekday=weekday, start=start, end=end, last_slot=datetime.now())
+        slot = cls(id=str(uuid4()), user_id=user_id, weekday=weekday, start=start, end=end, last_slot=utcnow())
         await db.add(slot)
         await slot.create_slots()
         return slot
@@ -44,7 +46,7 @@ class WeeklySlot(Base):
     async def create_slots(self) -> None:
         from .slots import Slot
 
-        until = datetime.now() + timedelta(days=30)
+        until = utcnow() + timedelta(days=30)
         minutes = ((self.end.hour - self.start.hour) * 60 + (self.end.minute - self.start.minute)) % (60 * 24)
         while self.last_slot <= until:
             self.last_slot = next_slot(self.last_slot, self.weekday, self.start)

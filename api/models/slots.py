@@ -7,12 +7,14 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import BigInteger, Column, DateTime, Enum, ForeignKey, String
+from sqlalchemy import BigInteger, Column, Enum, ForeignKey, String
 from sqlalchemy.orm import Mapped, relationship
 
 from api.database import Base, db, db_wrapper, select
+from api.database.database import UTCDateTime
 from api.models.weekly_slots import WeeklySlot
 from api.services import shop
+from api.utils.utc import utcnow
 
 
 class EventType(enum.Enum):
@@ -25,8 +27,8 @@ class Slot(Base):
 
     id: Mapped[str] = Column(String(36), primary_key=True, unique=True)
     user_id: Mapped[str] = Column(String(36))
-    start: Mapped[datetime] = Column(DateTime)
-    end: Mapped[datetime] = Column(DateTime)
+    start: Mapped[datetime] = Column(UTCDateTime)
+    end: Mapped[datetime] = Column(UTCDateTime)
     booked_by: Mapped[str | None] = Column(String(36), nullable=True)
     event_type: Mapped[EventType | None] = Column(Enum(EventType), nullable=True)
     student_coins: Mapped[int | None] = Column(BigInteger, nullable=True)
@@ -89,7 +91,7 @@ def generate_meeting_link() -> str:
 
 @db_wrapper
 async def clean_old_slots() -> None:
-    now = datetime.utcnow()
+    now = utcnow()
     slot: Slot
     async for slot in await db.stream(select(Slot).where(Slot.end < now)):
         if slot.booked and slot.event_type == EventType.EXAM and now - slot.end < timedelta(days=7):

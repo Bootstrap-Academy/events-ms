@@ -1,7 +1,7 @@
 """Endpoints related to exams"""
 
 import random
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, AsyncIterator, Coroutine
 
 from fastapi import APIRouter, Body, Query
@@ -22,6 +22,7 @@ from api.services.auth import get_instructor
 from api.services.skills import complete_skill, get_completed_skills, get_lecturers, get_skill
 from api.settings import settings
 from api.utils.cache import clear_cache, redis_cached
+from api.utils.utc import utcnow
 
 
 router = APIRouter()
@@ -39,7 +40,7 @@ async def get_examiners(skill_id: str) -> list[tuple[models.Exam, Coroutine[None
                 exam,
                 db.stream(
                     filter_by(models.Slot, user_id=examiner, booked_by=None).where(
-                        models.Slot.start - datetime.now() >= timedelta(days=1)
+                        models.Slot.start - utcnow() >= timedelta(days=1)
                     )
                 ),
             )
@@ -101,8 +102,8 @@ async def get_slots(skill_id: str) -> Any:
 )
 async def book_exam(
     skill_id: str,
-    start: datetime | None = Query(None, description="Start of the exam"),
-    end: datetime | None = Query(None, description="End of the exam"),
+    start: int | None = Query(None, description="Start of the exam"),
+    end: int | None = Query(None, description="End of the exam"),
     user: User = user_auth,
 ) -> Any:
     """
@@ -127,7 +128,7 @@ async def book_exam(
     slots: list[models.Slot] = []
     for _, _slots in await get_examiners(skill_id):
         async for slot in await _slots:
-            if (not start or start <= slot.start) and (not end or slot.end <= end):
+            if (not start or start <= slot.start.timestamp()) and (not end or slot.end.timestamp() <= end):
                 slots.append(slot)
 
     if not slots:
@@ -196,7 +197,7 @@ async def grade_exam(
     """
 
     slot = await db.get(models.Slot, id=slot_id, user_id=user.id, event_type=EventType.EXAM)
-    if not slot or not slot.booked_by or not slot.skill_id or not slot.instructor_coins or datetime.now() < slot.start:
+    if not slot or not slot.booked_by or not slot.skill_id or not slot.instructor_coins or utcnow() < slot.start:
         raise ExamNotFoundError
 
     await db.delete(slot)
