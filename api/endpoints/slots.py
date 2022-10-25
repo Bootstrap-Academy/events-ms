@@ -99,6 +99,8 @@ async def add_weekly_slot(data: CreateWeeklySlot, user_id: str = get_user(requir
     *Requirements:* **VERIFIED** and (**SELF** or **ADMIN**)
     """
 
+    await clear_cache("calendar")
+
     return (
         await models.WeeklySlot.create(
             user_id, data.weekday, time(*divmod(data.start, 60)), time(*divmod(data.end, 60))
@@ -122,10 +124,8 @@ async def delete_weekly_slot(slot_id: str, user_id: str = get_user(require_self_
     if not slot:
         raise SlotNotFoundException
 
-    booked = False
     for s in [*slot.slots]:
         if s.booked:
-            booked = True
             s.weekly_slot = None
             s.weekly_slot_id = None
         else:
@@ -133,7 +133,6 @@ async def delete_weekly_slot(slot_id: str, user_id: str = get_user(require_self_
 
     await db.delete(slot)
 
-    if booked:
-        await clear_cache("calendar")
+    await clear_cache("calendar")
 
     return True
