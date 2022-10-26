@@ -19,7 +19,7 @@ from api.schemas.exams import BookedExam, Exam, ExamSlot
 from api.schemas.user import User
 from api.services import shop
 from api.services.auth import get_instructor
-from api.services.skills import complete_skill, get_completed_skills, get_lecturers, get_skill
+from api.services.skills import complete_skill, get_completed_skills, get_lecturers, get_skill_dependencies
 from api.settings import settings
 from api.utils.cache import clear_cache, redis_cached
 from api.utils.utc import utcnow
@@ -115,14 +115,14 @@ async def book_exam(
     if await db.exists(filter_by(models.Slot, booked_by=user.id, event_type=EventType.EXAM, skill_id=skill_id)):
         raise ExamAlreadyBookedError
 
-    if not (skill := await get_skill(skill_id)):
+    if (dependencies := await get_skill_dependencies(skill_id)) is None:
         raise SkillNotFoundError
 
     completed_skills = await get_completed_skills(user.id)
     if skill_id in completed_skills:
         raise ExamAlreadyPassedError
 
-    if not skill.dependencies.issubset(completed_skills):
+    if not dependencies.issubset(completed_skills):
         raise SkillRequirementsNotMetError
 
     slots: list[models.Slot] = []

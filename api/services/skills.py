@@ -8,7 +8,6 @@ from api.utils.cache import redis_cached
 class Skill(BaseModel):
     id: str
     name: str
-    dependencies: set[str]
 
     class Config:
         extra = Extra.ignore
@@ -23,6 +22,15 @@ async def get_skills() -> list[Skill]:
 
 async def get_skill(skill: str) -> Skill | None:
     return next(iter(s for s in await get_skills() if s.id == skill), None)
+
+
+@redis_cached("skills", "skill")
+async def get_skill_dependencies(skill: str) -> set[str] | None:
+    async with InternalService.SKILLS.client as client:
+        response = await client.get(f"/skills/{skill}/dependencies")
+        if response.status_code != 200:
+            return None
+        return set(response.json())
 
 
 @redis_cached("user_skills", "user_id")
