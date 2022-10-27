@@ -25,7 +25,7 @@ from api.services.auth import get_email
 from api.services.skills import get_completed_skills
 from api.settings import settings
 from api.utils.cache import clear_cache, redis_cached
-from api.utils.email import WEBINAR_BOOKED
+from api.utils.email import BOOKED_WEBINAR
 from api.utils.utc import utcfromtimestamp, utcnow
 
 
@@ -171,8 +171,12 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
     await clear_cache("calendar")
 
     if email := await get_email(user.id):
-        await WEBINAR_BOOKED.send(
-            email, title=webinar.name, datetime=webinar.start.strftime("%d.%m.%Y %H:%M"), location=webinar.link
+        await BOOKED_WEBINAR.send(
+            email,
+            title=webinar.name,
+            datetime=webinar.start.strftime("%d.%m.%Y %H:%M"),
+            location=webinar.link,
+            coins=webinar.price,
         )
 
     return webinar.serialize(True)

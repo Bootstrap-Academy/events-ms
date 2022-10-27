@@ -2,7 +2,6 @@ import asyncio
 import random
 import string
 from dataclasses import dataclass
-from email.message import EmailMessage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
@@ -32,7 +31,9 @@ class Message:
         await send_email(recipient, self.title, content, reply_to=reply_to)
 
 
-WEBINAR_BOOKED = Message(title="Webinar booked", template="webinar_booked.html")
+BOOKED_WEBINAR = Message(title="Booked webinar", template="booked_webinar.html")
+BOOKED_COACHING = Message(title="Booked coaching", template="booked_coaching.html")
+BOOKED_EXAM = Message(title="Booked exam", template="booked_exam.html")
 
 
 @run_in_thread

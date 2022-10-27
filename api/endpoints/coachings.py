@@ -15,10 +15,11 @@ from api.models.slots import EventType
 from api.schemas.coachings import Coaching, CoachingSlot, PublicCoaching, UpdateCoaching
 from api.schemas.user import User
 from api.services import shop
-from api.services.auth import get_instructor
+from api.services.auth import get_email, get_instructor
 from api.services.skills import get_completed_skills, get_lecturers
 from api.settings import settings
 from api.utils.cache import clear_cache, redis_cached
+from api.utils.email import BOOKED_COACHING
 from api.utils.utc import utcnow
 
 
@@ -110,9 +111,17 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
         raise NotEnoughCoinsError
 
     slot.book(user.id, EventType.COACHING, coaching.price, int(coaching.price * (1 - settings.event_fee)), skill_id)
-    # todo: email
 
     await clear_cache("calendar")
+
+    if email := await get_email(user.id):
+        await BOOKED_COACHING.send(
+            email,
+            instructor=instructor,
+            datetime=slot.start.strftime("%d.%m.%Y %H:%M"),
+            location=slot.meeting_link,
+            coins=coaching.price,
+        )
 
     return CoachingSlot(
         id=slot.id,
