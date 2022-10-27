@@ -47,9 +47,7 @@ def setup_app() -> None:
 
     if settings.sentry_dsn:
         logger.debug("initializing sentry")
-        setup_sentry(
-            app, settings.sentry_dsn, "Bootstrap Academy Backend: Events Microservice", get_version().description
-        )
+        setup_sentry(app, settings.sentry_dsn, "events-ms", get_version().description)
 
     if settings.debug:
         app.add_middleware(

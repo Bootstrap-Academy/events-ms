@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     auth_redis_url: str = Field("redis://redis:6379/0", regex=r"^redis://.*$")
 
     sentry_dsn: str | None = None
+    sentry_environment: str = "test"
 
 
 settings = Settings()
