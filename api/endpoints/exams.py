@@ -18,11 +18,10 @@ from api.models.slots import EventType
 from api.schemas.exams import BookedExam, Exam, ExamSlot
 from api.schemas.user import User
 from api.services import shop
-from api.services.auth import get_email, get_instructor
+from api.services.auth import get_instructor
 from api.services.skills import complete_skill, get_completed_skills, get_lecturers, get_skill_dependencies
 from api.settings import settings
 from api.utils.cache import clear_cache, redis_cached
-from api.utils.email import BOOKED_EXAM
 from api.utils.utc import utcnow
 
 
@@ -145,11 +144,6 @@ async def book_exam(
     )
 
     await clear_cache("calendar")
-
-    if email := await get_email(user.id):
-        await BOOKED_EXAM.send(
-            email, datetime=slot.start.strftime("%d.%m.%Y %H:%M"), location=slot.meeting_link, coins=settings.exam_price
-        )
 
     return ExamSlot(
         id=slot.id,

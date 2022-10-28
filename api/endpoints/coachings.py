@@ -117,9 +117,10 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
     if email := await get_email(user.id):
         await BOOKED_COACHING.send(
             email,
-            instructor=instructor,
-            datetime=slot.start.strftime("%d.%m.%Y %H:%M"),
-            location=slot.meeting_link,
+            instructor=instructor.display_name,
+            date=slot.start.strftime("%d.%m.%Y"),
+            time=slot.start.strftime("%H:%M"),
+            link=slot.meeting_link,
             coins=coaching.price,
         )
 

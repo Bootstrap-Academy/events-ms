@@ -174,8 +174,9 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
         await BOOKED_WEBINAR.send(
             email,
             title=webinar.name,
-            datetime=webinar.start.strftime("%d.%m.%Y %H:%M"),
-            location=webinar.link,
+            date=webinar.start.strftime("%d.%m.%Y"),
+            time=webinar.start.strftime("%H:%M"),
+            link=webinar.link,
             coins=webinar.price,
         )
 

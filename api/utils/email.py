@@ -31,9 +31,8 @@ class Message:
         await send_email(recipient, self.title, content, reply_to=reply_to)
 
 
-BOOKED_WEBINAR = Message(title="Booked webinar", template="booked_webinar.html")
-BOOKED_COACHING = Message(title="Booked coaching", template="booked_coaching.html")
-BOOKED_EXAM = Message(title="Booked exam", template="booked_exam.html")
+BOOKED_WEBINAR = Message(title="Anmeldungsbestätigung - Bootstrap Academy", template="booked_webinar.html")
+BOOKED_COACHING = Message(title="Anmeldungsbestätigung - Bootstrap Academy", template="booked_coaching.html")
 
 
 @run_in_thread
