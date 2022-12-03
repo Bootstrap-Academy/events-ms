@@ -1,6 +1,5 @@
 """Endpoints related to webinars."""
 
-from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -119,6 +118,27 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     await clear_cache("calendar")
 
     return webinar.serialize(True)
+
+
+@router.get(
+    "/webinars/{webinar_id}",
+    dependencies=[require_verified_email],
+    responses=verified_responses(Webinar, WebinarNotFoundError),
+)
+async def get_webinars(webinar: models.Webinar = get_webinar, user: User = user_auth) -> Any:
+    """
+    Get a webinar by id.
+
+    The `link` is included iff the user has registered for the webinar, has created this webinar or is an admin.
+
+    *Requirements:* **VERIFIED**
+    """
+
+    return webinar.serialize(
+        user.admin
+        or user.id == webinar.creator
+        or any(participant.user_id == user.id for participant in webinar.participants)
+    )
 
 
 @router.get(
