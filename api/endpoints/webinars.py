@@ -21,7 +21,7 @@ from api.schemas.user import User
 from api.schemas.webinars import CreateWebinar, UpdateWebinar, Webinar
 from api.services import shop
 from api.services.auth import get_email
-from api.services.skills import get_completed_skills
+from api.services.skills import get_skill_levels
 from api.settings import settings
 from api.utils.cache import clear_cache, redis_cached
 from api.utils.email import BOOKED_WEBINAR
@@ -91,7 +91,7 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     *Requirements:* **VERIFIED**
     """
 
-    if not user.admin and not {settings.webinar_skill, data.skill_id}.issubset(await get_completed_skills(user.id)):
+    if not user.admin and (await get_skill_levels(user.id)).get(data.skill_id, 0) < settings.webinar_level:
         raise SkillRequirementsNotMetError
 
     now = utcnow()

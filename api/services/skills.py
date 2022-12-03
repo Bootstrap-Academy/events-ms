@@ -1,3 +1,5 @@
+from typing import cast
+
 from pydantic import BaseModel, Extra
 
 from api.services.internal import InternalService
@@ -34,16 +36,16 @@ async def get_skill_dependencies(skill: str) -> set[str] | None:
 
 
 @redis_cached("user_skills", "user_id")
-async def get_completed_skills(user_id: str) -> set[str]:
+async def get_skill_levels(user_id: str) -> dict[str, int]:
     async with InternalService.SKILLS.client as client:
         response = await client.get(f"/skills/{user_id}")
-        return set(response.json())
+        return cast(dict[str, int], response.json())
 
 
 @redis_cached("user_skills", "completed_skills")
-async def get_lecturers(completed_skills: set[str]) -> set[str]:
+async def get_lecturers(skill_id: str, level: int) -> set[str]:
     async with InternalService.SKILLS.client as client:
-        response = await client.get("/graduates", params={"skills": [*completed_skills]})
+        response = await client.get(f"/graduates/{skill_id}", params={"level": level})
         return set(response.json())
 
 

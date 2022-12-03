@@ -16,7 +16,7 @@ from api.schemas.coachings import Coaching, CoachingSlot, PublicCoaching, Update
 from api.schemas.user import User
 from api.services import shop
 from api.services.auth import get_email, get_instructor
-from api.services.skills import get_completed_skills, get_lecturers
+from api.services.skills import get_lecturers, get_skill_levels
 from api.settings import settings
 from api.utils.cache import clear_cache, redis_cached
 from api.utils.email import BOOKED_COACHING
@@ -53,7 +53,7 @@ async def get_slots(skill_id: str) -> Any:
 
     out = []
     instructor_id: str
-    for instructor_id in await get_lecturers({skill_id, settings.coaching_skill}):
+    for instructor_id in await get_lecturers(skill_id, settings.coaching_level):
         coaching = await db.get(models.Coaching, user_id=instructor_id, skill_id=skill_id)
         if not coaching:
             continue
@@ -144,7 +144,7 @@ async def set_coaching(data: UpdateCoaching, skill_id: str, user: User = user_au
     *Requirements:* **VERIFIED**
     """
 
-    if not user.admin and not {settings.coaching_skill, skill_id}.issubset(await get_completed_skills(user.id)):
+    if not user.admin and not (await get_skill_levels(user.id)).get(skill_id, 0) < settings.coaching_level:
         raise SkillRequirementsNotMetError
 
     coaching = await db.get(models.Coaching, user_id=user.id, skill_id=skill_id)

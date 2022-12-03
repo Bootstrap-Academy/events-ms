@@ -22,9 +22,8 @@ class Settings(BaseSettings):
     skills_url: str = ""
     shop_url: str = ""
 
-    webinar_skill: str = "instructor"
-    coaching_skill: str = "instructor"
-    examiner_skill: str = "examiner"
+    webinar_level: int = 15
+    coaching_level: int = 42
 
     exam_price: int = 15000  # 150€ = 15000 MC
     exam_xp: int = 500
