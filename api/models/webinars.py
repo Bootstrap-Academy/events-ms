@@ -6,7 +6,9 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import BigInteger, Column, Integer, String
 from sqlalchemy.orm import Mapped, relationship
 
+from .lecturer_rating import LecturerRating
 from ..database.database import UTCDateTime
+from ..services.auth import get_instructor
 from ..utils.utc import utcnow
 from api.database import Base, db, db_wrapper, select
 
@@ -33,11 +35,12 @@ class Webinar(Base):
         "WebinarParticipant", back_populates="webinar", lazy="selectin", cascade="all, delete-orphan"
     )
 
-    def serialize(self, include_link: bool) -> dict[str, Any]:
+    async def serialize(self, include_link: bool) -> dict[str, Any]:
         return {
             "id": self.id,
             "skill_id": self.skill_id,
-            "creator": self.creator,
+            "instructor": await get_instructor(self.creator),
+            "rating": await LecturerRating.get_rating(self.creator, self.skill_id),
             "creation_date": self.creation_date.timestamp(),
             "name": self.name,
             "description": self.description,
@@ -52,5 +55,10 @@ class Webinar(Base):
 
 @db_wrapper
 async def clean_old_webinars() -> None:
-    async for webinar in await db.stream(select(Webinar).where(Webinar.end < utcnow())):
+    webinar: Webinar
+    async for webinar in await db.stream(select(Webinar, Webinar.participants).where(Webinar.end < utcnow())):
+        for participant in webinar.participants:
+            await LecturerRating.create(
+                webinar.creator, participant.user_id, webinar.skill_id, webinar.start, webinar.name
+            )
         await db.delete(webinar)

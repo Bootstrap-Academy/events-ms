@@ -74,7 +74,7 @@ async def cleanup_loop() -> None:
             await clean_old_slots()
         except Exception as e:
             logger.exception(e)
-        await asyncio.sleep(20 * 60)
+        await asyncio.sleep(5 * 60)
 
 
 @app.on_event("startup")

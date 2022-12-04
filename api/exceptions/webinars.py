@@ -25,3 +25,14 @@ class CannotStartInPastError(APIException):
     status_code = status.HTTP_400_BAD_REQUEST
     detail = "Cannot start in the past"
     description = "The webinar cannot start in the past."
+
+
+class InsufficientRatingError(APIException):
+    status_code = status.HTTP_403_FORBIDDEN
+    detail = "Insufficient rating"
+    description = "The user does not have the required rating to set the price to this value."
+
+    def __init__(self, max_price: int):
+        super().__init__()
+
+        self.detail = {"msg": self.detail, "max_price": max_price}  # type: ignore

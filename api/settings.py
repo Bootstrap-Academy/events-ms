@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     webinar_level: int = 15
     coaching_level: int = 42
 
+    rating_half_life: int = 60  # days
+    rating_max_keep: int = 730  # days = 2 years
+
     exam_price: int = 15000  # 150€ = 15000 MC
     exam_xp: int = 500
 

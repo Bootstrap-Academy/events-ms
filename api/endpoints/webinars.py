@@ -15,6 +15,7 @@ from api.exceptions.webinars import (
     AlreadyFullError,
     AlreadyRegisteredError,
     CannotStartInPastError,
+    InsufficientRatingError,
     WebinarNotFoundError,
 )
 from api.schemas.user import User
@@ -69,7 +70,7 @@ async def list_webinars(
         query = query.filter_by(creator=creator)
 
     return [
-        webinar.serialize(user.admin or booked)
+        await webinar.serialize(user.admin or booked)
         async for webinar in await db.stream(query)
         if (
             booked := user.id == webinar.creator
@@ -82,7 +83,9 @@ async def list_webinars(
 @router.post(
     "/webinars",
     dependencies=[require_verified_email],
-    responses=verified_responses(Webinar, SkillRequirementsNotMetError, CannotStartInPastError),
+    responses=verified_responses(
+        Webinar, SkillRequirementsNotMetError, CannotStartInPastError, InsufficientRatingError
+    ),
 )
 async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     """
@@ -97,6 +100,17 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     now = utcnow()
     if data.start <= now.timestamp():
         raise CannotStartInPastError
+
+    rating = await models.LecturerRating.get_rating(user.id, data.skill_id) or 0
+    mx: int | None = None
+    if rating < 3:
+        mx = 0
+    elif rating < 4:
+        mx = 5000
+    elif rating < 4.5:
+        mx = 10000
+    if mx is not None and data.price * data.max_participants > mx and not user.admin:
+        raise InsufficientRatingError(mx // data.max_participants)
 
     webinar = models.Webinar(
         id=str(uuid4()),
@@ -117,7 +131,7 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     await clear_cache("webinars")
     await clear_cache("calendar")
 
-    return webinar.serialize(True)
+    return await webinar.serialize(True)
 
 
 @router.get(
@@ -134,7 +148,7 @@ async def get_webinars(webinar: models.Webinar = get_webinar, user: User = user_
     *Requirements:* **VERIFIED**
     """
 
-    return webinar.serialize(
+    return await webinar.serialize(
         user.admin
         or user.id == webinar.creator
         or any(participant.user_id == user.id for participant in webinar.participants)
@@ -200,7 +214,7 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
             coins=webinar.price,
         )
 
-    return webinar.serialize(True)
+    return await webinar.serialize(True)
 
 
 @router.patch(
@@ -244,7 +258,7 @@ async def update_webinar(data: UpdateWebinar, webinar: models.Webinar = get_webi
     await clear_cache("webinars")
     await clear_cache("calendar")
 
-    return webinar.serialize(True)
+    return await webinar.serialize(True)
 
 
 @router.delete(
