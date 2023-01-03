@@ -8,7 +8,7 @@ from sqlalchemy.orm import Mapped, relationship
 
 from .lecturer_rating import LecturerRating
 from ..database.database import UTCDateTime
-from ..services.auth import get_instructor
+from ..services.auth import get_userinfo
 from ..utils.utc import utcnow
 from api.database import Base, db, db_wrapper, select
 
@@ -26,6 +26,7 @@ class Webinar(Base):
     creation_date: Mapped[datetime] = Column(UTCDateTime)
     name: Mapped[str] = Column(String(256))
     description: Mapped[str] = Column(String(4096))
+    admin_link: Mapped[str] = Column(String(256))
     link: Mapped[str] = Column(String(256))
     start: Mapped[datetime] = Column(UTCDateTime)
     end: Mapped[datetime] = Column(UTCDateTime)
@@ -35,15 +36,16 @@ class Webinar(Base):
         "WebinarParticipant", back_populates="webinar", lazy="selectin", cascade="all, delete-orphan"
     )
 
-    async def serialize(self, include_link: bool) -> dict[str, Any]:
+    async def serialize(self, include_link: bool, instructor: bool) -> dict[str, Any]:
         return {
             "id": self.id,
             "skill_id": self.skill_id,
-            "instructor": await get_instructor(self.creator),
+            "instructor": await get_userinfo(self.creator),
             "rating": await LecturerRating.get_rating(self.creator, self.skill_id),
             "creation_date": self.creation_date.timestamp(),
             "name": self.name,
             "description": self.description,
+            "admin_link": self.admin_link if include_link and instructor else None,
             "link": self.link if include_link else None,
             "start": self.start.timestamp(),
             "end": self.end.timestamp(),

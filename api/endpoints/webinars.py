@@ -3,11 +3,11 @@
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 
 from api import models
 from api.auth import require_verified_email, user_auth
-from api.database import db, select
+from api.database import db
 from api.exceptions.auth import PermissionDeniedError, verified_responses
 from api.exceptions.coaching import NotEnoughCoinsError
 from api.exceptions.skills import SkillRequirementsNotMetError
@@ -24,7 +24,7 @@ from api.services import shop
 from api.services.auth import get_email
 from api.services.skills import get_skill_levels
 from api.settings import settings
-from api.utils.cache import clear_cache, redis_cached
+from api.utils.cache import clear_cache
 from api.utils.email import BOOKED_WEBINAR
 from api.utils.utc import utcfromtimestamp, utcnow
 
@@ -45,39 +45,6 @@ async def get_webinar(webinar_id: str) -> models.Webinar:
 async def can_manage_webinar(webinar: models.Webinar = get_webinar, user: User = user_auth) -> None:
     if webinar.creator != user.id and not user.admin:
         raise PermissionDeniedError
-
-
-@router.get("/webinars", dependencies=[require_verified_email], responses=verified_responses(list[Webinar]))
-@redis_cached("webinars", "skill_id", "creator", "booked_only", "user")
-async def list_webinars(
-    skill_id: str | None = Query(None, description="Filter by skill id"),
-    creator: str | None = Query(None, description="Filter by creator id"),
-    booked_only: bool = Query(False, description="Filter by whether the user has booked the webinar"),
-    user: User = user_auth,
-) -> Any:
-    """
-    Return a list of all webinars.
-
-    The `link` is included iff the user has registered for the webinar, has created this webinar or is an admin.
-
-    *Requirements:* **VERIFIED**
-    """
-
-    query = select(models.Webinar).where(models.Webinar.end > utcnow())
-    if skill_id:
-        query = query.filter_by(skill_id=skill_id)
-    if creator:
-        query = query.filter_by(creator=creator)
-
-    return [
-        await webinar.serialize(user.admin or booked)
-        async for webinar in await db.stream(query)
-        if (
-            booked := user.id == webinar.creator
-            or any(participant.user_id == user.id for participant in webinar.participants)
-        )
-        or not booked_only
-    ]
 
 
 @router.post(
@@ -119,6 +86,7 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
         creation_date=now,
         name=data.name,
         description=data.description,
+        admin_link=data.admin_link or data.link,
         link=data.link,
         start=utcfromtimestamp(data.start),
         end=utcfromtimestamp(data.start + data.duration * 60),
@@ -131,7 +99,7 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     await clear_cache("webinars")
     await clear_cache("calendar")
 
-    return await webinar.serialize(True)
+    return await webinar.serialize(True, True)
 
 
 @router.get(
@@ -139,7 +107,7 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     dependencies=[require_verified_email],
     responses=verified_responses(Webinar, WebinarNotFoundError),
 )
-async def get_webinars(webinar: models.Webinar = get_webinar, user: User = user_auth) -> Any:
+async def get_webinar_by_id(webinar: models.Webinar = get_webinar, user: User = user_auth) -> Any:
     """
     Get a webinar by id.
 
@@ -148,10 +116,13 @@ async def get_webinars(webinar: models.Webinar = get_webinar, user: User = user_
     *Requirements:* **VERIFIED**
     """
 
+    # todo: refactor
+
     return await webinar.serialize(
         user.admin
         or user.id == webinar.creator
-        or any(participant.user_id == user.id for participant in webinar.participants)
+        or any(participant.user_id == user.id for participant in webinar.participants),
+        user.admin or user.id == webinar.creator,
     )
 
 
@@ -214,7 +185,7 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
             coins=webinar.price,
         )
 
-    return await webinar.serialize(True)
+    return await webinar.serialize(True, False)
 
 
 @router.patch(
@@ -252,13 +223,14 @@ async def update_webinar(data: UpdateWebinar, webinar: models.Webinar = get_webi
     if data.max_participants is not None and data.max_participants != webinar.max_participants:
         webinar.max_participants = data.max_participants
 
+    # todo: check price limits
     if data.price is not None and data.price != webinar.price:
         webinar.price = data.price
 
     await clear_cache("webinars")
     await clear_cache("calendar")
 
-    return await webinar.serialize(True)
+    return await webinar.serialize(True, True)
 
 
 @router.delete(

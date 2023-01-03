@@ -34,7 +34,8 @@ class Slot(Base):
     student_coins: Mapped[int | None] = Column(BigInteger, nullable=True)
     instructor_coins: Mapped[int | None] = Column(BigInteger, nullable=True)
     skill_id: Mapped[str | None] = Column(String(256), nullable=True)
-    meeting_link: Mapped[str | None] = Column(String(256), nullable=True)
+    admin_link: Mapped[str | None] = Column(String(256), nullable=True)
+    link: Mapped[str | None] = Column(String(256), nullable=True)
     weekly_slot_id: Mapped[str | None] = Column(String(36), ForeignKey("events_weekly_slots.id"), nullable=True)
     weekly_slot: Mapped[WeeklySlot | None] = relationship("WeeklySlot", back_populates="slots", lazy="selectin")
 
@@ -58,7 +59,8 @@ class Slot(Base):
             student_coins=None,
             instructor_coins=None,
             skill_id=None,
-            meeting_link=None,
+            admin_link=None,
+            link=None,
             weekly_slot_id=None,
         )
         await db.add(slot)
@@ -72,7 +74,7 @@ class Slot(Base):
         self.student_coins = student_coins
         self.instructor_coins = instructor_coins
         self.skill_id = skill_id
-        self.meeting_link = generate_meeting_link()
+        self.admin_link, self.link = generate_meeting_link()
 
     def cancel(self) -> None:
         self.booked_by = None
@@ -80,13 +82,15 @@ class Slot(Base):
         self.student_coins = None
         self.instructor_coins = None
         self.skill_id = None
-        self.meeting_link = None
+        self.admin_link = None
+        self.link = None
 
 
-def generate_meeting_link() -> str:
-    return "https://meet.jit.si/" + "-".join(
+def generate_meeting_link() -> tuple[str, str]:
+    link = "https://meet.jit.si/" + "-".join(
         "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(4)) for _ in range(4)  # noqa: S311
     )
+    return link, link
 
 
 @db_wrapper

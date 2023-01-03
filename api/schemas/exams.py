@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from api.schemas.coachings import Instructor
+from api.schemas.user import UserInfo
 
 
 class Exam(BaseModel):
@@ -16,4 +16,4 @@ class ExamSlot(BaseModel):
 
 
 class BookedExam(ExamSlot):
-    student: Instructor = Field(description="The ID of the student")
+    student: UserInfo = Field(description="The ID of the student")

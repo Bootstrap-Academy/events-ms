@@ -11,7 +11,7 @@ from api.exceptions.auth import admin_responses, verified_responses
 from api.exceptions.ratings import RatingNotFoundError
 from api.schemas.ratings import Unrated
 from api.schemas.user import User
-from api.services.auth import get_instructor
+from api.services.auth import get_userinfo
 
 
 router = APIRouter()
@@ -35,7 +35,7 @@ async def list_unrated(user: User = user_auth) -> Any:
     return [
         Unrated(
             id=x.id,
-            instructor=await get_instructor(x.lecturer_id),
+            instructor=await get_userinfo(x.lecturer_id),
             skill_id=x.skill_id,
             webinar_timestamp=x.webinar_timestamp.timestamp(),
             webinar_name=x.webinar_name,

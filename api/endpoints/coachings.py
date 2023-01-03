@@ -15,69 +15,15 @@ from api.models.slots import EventType
 from api.schemas.coachings import Coaching, CoachingSlot, PublicCoaching, UpdateCoaching
 from api.schemas.user import User
 from api.services import shop
-from api.services.auth import get_email, get_instructor
-from api.services.skills import get_lecturers, get_skill_levels
+from api.services.auth import get_email, get_userinfo
+from api.services.skills import get_skill_levels
 from api.settings import settings
-from api.utils.cache import clear_cache, redis_cached
+from api.utils.cache import clear_cache
 from api.utils.email import BOOKED_COACHING
 from api.utils.utc import utcnow
 
 
 router = APIRouter()
-
-
-@router.get("/coachings", dependencies=[require_verified_email], responses=verified_responses(list[Coaching]))
-async def get_coachings(user: User = user_auth) -> Any:
-    """
-    Return a list of all coachings for an instructor.
-
-    *Requirements:* **VERIFIED**
-    """
-
-    return [
-        Coaching(skill_id=coaching.skill_id, price=coaching.price)
-        async for coaching in await db.stream(filter_by(models.Coaching, user_id=user.id))
-    ]
-
-
-@router.get(
-    "/coachings/{skill_id}", dependencies=[require_verified_email], responses=verified_responses(list[CoachingSlot])
-)
-@redis_cached("calendar", "skill_id")
-async def get_slots(skill_id: str) -> Any:
-    """
-    Return a list of available times for a coaching session.
-
-    *Requirements:* **VERIFIED**
-    """
-
-    out = []
-    instructor_id: str
-    for instructor_id in await get_lecturers(skill_id, settings.coaching_level):
-        coaching = await db.get(models.Coaching, user_id=instructor_id, skill_id=skill_id)
-        if not coaching:
-            continue
-
-        instructor = await get_instructor(instructor_id)
-        if not instructor:
-            continue
-
-        slot: models.Slot
-        async for slot in await db.stream(
-            filter_by(models.Slot, user_id=instructor_id, booked_by=None).where(
-                models.Slot.start >= utcnow() + timedelta(days=1)
-            )
-        ):
-            out.append(
-                CoachingSlot(
-                    id=slot.id,
-                    coaching=PublicCoaching(instructor=instructor, skill_id=skill_id, price=coaching.price),
-                    start=slot.start.timestamp(),
-                    end=slot.end.timestamp(),
-                )
-            )
-
-    return out
 
 
 @router.post(
@@ -103,7 +49,7 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
     if not coaching:
         raise CoachingNotFoundError
 
-    instructor = await get_instructor(slot.user_id)
+    instructor = await get_userinfo(slot.user_id)
     if not instructor:
         raise CoachingNotFoundError
 
@@ -120,7 +66,7 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
             instructor=instructor.display_name,
             date=slot.start.strftime("%d.%m.%Y"),
             time=slot.start.strftime("%H:%M"),
-            link=slot.meeting_link,
+            link=slot.link,
             coins=coaching.price,
         )
 
@@ -130,6 +76,20 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
         start=slot.start.timestamp(),
         end=slot.end.timestamp(),
     )
+
+
+@router.get("/coachings", dependencies=[require_verified_email], responses=verified_responses(list[Coaching]))
+async def get_coachings(user: User = user_auth) -> Any:
+    """
+    Return a list of all coaching configurations for an instructor.
+
+    *Requirements:* **VERIFIED**
+    """
+
+    return [
+        Coaching(skill_id=coaching.skill_id, price=coaching.price)
+        async for coaching in await db.stream(filter_by(models.Coaching, user_id=user.id))
+    ]
 
 
 @router.put(

@@ -15,9 +15,11 @@ def create_ics(events: list[Event]) -> bytes:
         if e.description:
             event.add("description", e.description)
         event.add("dtstart", utcfromtimestamp(e.start))
-        event.add("dtend", utcfromtimestamp(e.end))
-        if e.location:
-            event.add("location", e.location)
+        event.add("dtend", utcfromtimestamp(e.start + e.duration * 60))
+        if e.admin_link:
+            event.add("location", e.admin_link)
+        elif e.link:
+            event.add("location", e.link)
         cal.add_component(event)
 
     return cast(bytes, cal.to_ical())

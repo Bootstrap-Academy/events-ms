@@ -1,6 +1,6 @@
 from typing import cast
 
-from api.schemas.coachings import Instructor
+from api.schemas.user import UserInfo
 from api.services.internal import InternalService
 from api.utils.cache import redis_cached
 
@@ -41,10 +41,10 @@ async def get_user_id_by_email(email: str) -> str | None:
 
 
 @redis_cached("user", "user_id")
-async def get_instructor(user_id: str) -> Instructor | None:
+async def get_userinfo(user_id: str) -> UserInfo | None:
     async with InternalService.AUTH.client as client:
         response = await client.get(f"/users/{user_id}")
         if response.status_code != 200:
             return None
 
-        return Instructor(**response.json())
+        return UserInfo(**response.json())
