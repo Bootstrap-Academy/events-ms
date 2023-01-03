@@ -48,6 +48,19 @@ async def can_manage_webinar(webinar: models.Webinar = get_webinar, user: User =
         raise PermissionDeniedError
 
 
+async def check_price(user_id: str, skill_id: str, price: int, max_participants: int) -> None:
+    rating = await models.LecturerRating.get_rating(user_id, skill_id) or 0
+    mx: int | None = None
+    if rating < 3:
+        mx = 0
+    elif rating < 4:
+        mx = 5000
+    elif rating < 4.5:
+        mx = 10000
+    if mx is not None and price * max_participants > mx:
+        raise InsufficientRatingError(mx // max_participants)
+
+
 @router.post(
     "/webinars",
     dependencies=[require_verified_email],
@@ -69,16 +82,8 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     if data.start <= now.timestamp():
         raise CannotStartInPastError
 
-    rating = await models.LecturerRating.get_rating(user.id, data.skill_id) or 0
-    mx: int | None = None
-    if rating < 3:
-        mx = 0
-    elif rating < 4:
-        mx = 5000
-    elif rating < 4.5:
-        mx = 10000
-    if mx is not None and data.price * data.max_participants > mx and not user.admin:
-        raise InsufficientRatingError(mx // data.max_participants)
+    if not user.admin:
+        await check_price(user.id, data.skill_id, data.price, data.max_participants)
 
     webinar = models.Webinar(
         id=str(uuid4()),
@@ -190,7 +195,7 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
     dependencies=[require_verified_email, can_manage_webinar],
     responses=verified_responses(Webinar, WebinarNotFoundError, PermissionDeniedError, CannotStartInPastError),
 )
-async def update_webinar(data: UpdateWebinar, webinar: models.Webinar = get_webinar) -> Any:
+async def update_webinar(data: UpdateWebinar, user: User = user_auth, webinar: models.Webinar = get_webinar) -> Any:
     """
     Update a webinar.
 
@@ -220,9 +225,11 @@ async def update_webinar(data: UpdateWebinar, webinar: models.Webinar = get_webi
     if data.max_participants is not None and data.max_participants != webinar.max_participants:
         webinar.max_participants = data.max_participants
 
-    # todo: check price limits
     if data.price is not None and data.price != webinar.price:
         webinar.price = data.price
+
+    if not user.admin:
+        await check_price(user.id, webinar.skill_id, webinar.price, webinar.max_participants)
 
     await clear_cache("webinars")
     await clear_cache("calendar")
