@@ -12,7 +12,8 @@ from api.exceptions.auth import verified_responses
 from api.exceptions.coaching import CannotBookOwnCoachingError, CoachingNotFoundError, NotEnoughCoinsError
 from api.exceptions.skills import SkillRequirementsNotMetError
 from api.models.slots import EventType
-from api.schemas.coachings import Coaching, CoachingSlot, PublicCoaching, UpdateCoaching
+from api.schemas import calendar
+from api.schemas.coachings import Coaching, UpdateCoaching
 from api.schemas.user import User
 from api.services import shop
 from api.services.auth import get_email, get_userinfo
@@ -29,7 +30,9 @@ router = APIRouter()
 @router.post(
     "/coachings/{skill_id}/{slot_id}",
     dependencies=[require_verified_email],
-    responses=verified_responses(CoachingSlot, CoachingNotFoundError, NotEnoughCoinsError, CannotBookOwnCoachingError),
+    responses=verified_responses(
+        calendar.Coaching, CoachingNotFoundError, NotEnoughCoinsError, CannotBookOwnCoachingError
+    ),
 )
 async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> Any:
     """
@@ -70,11 +73,21 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
             coins=coaching.price,
         )
 
-    return CoachingSlot(
+    return calendar.Coaching(
         id=slot.id,
-        coaching=PublicCoaching(instructor=instructor, skill_id=skill_id, price=coaching.price),
+        title=None,
+        description=None,
+        skill_id=slot.skill_id,
         start=slot.start.timestamp(),
-        end=slot.end.timestamp(),
+        duration=(slot.end - slot.start).total_seconds() // 60,
+        price=slot.student_coins,
+        admin_link=None,
+        link=slot.link,
+        instructor=await get_userinfo(slot.user_id),
+        instructor_rating=await models.LecturerRating.get_rating(slot.user_id, slot.skill_id),
+        booked=True,
+        bookable=False,
+        student=await get_userinfo(slot.booked_by),
     )
 
 
