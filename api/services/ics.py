@@ -2,11 +2,11 @@ from typing import cast
 
 import icalendar
 
-from api.schemas.calendar import Event
+from api.schemas.calendar import Coaching, Webinar
 from api.utils.utc import utcfromtimestamp
 
 
-def create_ics(events: list[Event]) -> bytes:
+def create_ics(events: list[Webinar | Coaching]) -> bytes:
     cal = icalendar.Calendar()
 
     for e in events:

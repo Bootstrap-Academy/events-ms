@@ -8,7 +8,6 @@ from api.schemas.user import UserInfo
 class EventType(enum.Enum):
     WEBINAR = "webinar"
     COACHING = "coaching"
-    # EXAM = "exam"
 
 
 class Event(BaseModel):
