@@ -1,23 +1,5 @@
 from pydantic import BaseModel, Field
 
-from api.schemas.user import UserInfo
-
-
-class Webinar(BaseModel):
-    id: str = Field(description="Webinar ID")
-    skill_id: str = Field(description="ID of the skill")
-    instructor: UserInfo = Field(description="Creator of the webinar")
-    rating: float | None = Field(description="Rating of the instructor for the corresponding skill")
-    creation_date: int = Field(description="Creation date")
-    name: str = Field(description="Name of the webinar")
-    description: str = Field(description="Description of the webinar")
-    link: str | None = Field(description="Link to the webinar")
-    start: int = Field(description="Start date")
-    end: int = Field(description="End date")
-    max_participants: int = Field(description="Maximum number of participants")
-    price: int = Field(description="Price of the webinar")
-    participants: int = Field(description="Number of registered participants")
-
 
 class CreateWebinar(BaseModel):
     skill_id: str = Field(description="ID of the skill")

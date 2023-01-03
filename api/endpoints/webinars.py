@@ -18,8 +18,9 @@ from api.exceptions.webinars import (
     InsufficientRatingError,
     WebinarNotFoundError,
 )
+from api.schemas.calendar import Webinar
 from api.schemas.user import User
-from api.schemas.webinars import CreateWebinar, UpdateWebinar, Webinar
+from api.schemas.webinars import CreateWebinar, UpdateWebinar
 from api.services import shop
 from api.services.auth import get_email
 from api.services.skills import get_skill_levels
@@ -99,7 +100,7 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     await clear_cache("webinars")
     await clear_cache("calendar")
 
-    return await webinar.serialize(True, True)
+    return await webinar.serialize(True, True, True, False)
 
 
 @router.get(
@@ -116,14 +117,10 @@ async def get_webinar_by_id(webinar: models.Webinar = get_webinar, user: User = 
     *Requirements:* **VERIFIED**
     """
 
-    # todo: refactor
+    _booked = user.id == webinar.creator or any(participant.user_id == user.id for participant in webinar.participants)
+    _bookable = not _booked and utcnow() < webinar.start and len(webinar.participants) < webinar.max_participants
 
-    return await webinar.serialize(
-        user.admin
-        or user.id == webinar.creator
-        or any(participant.user_id == user.id for participant in webinar.participants),
-        user.admin or user.id == webinar.creator,
-    )
+    return await webinar.serialize(user.admin or _booked, user.admin or user.id == webinar.creator, _booked, _bookable)
 
 
 @router.get(
@@ -185,7 +182,7 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
             coins=webinar.price,
         )
 
-    return await webinar.serialize(True, False)
+    return await webinar.serialize(True, False, True, False)
 
 
 @router.patch(
@@ -230,7 +227,7 @@ async def update_webinar(data: UpdateWebinar, webinar: models.Webinar = get_webi
     await clear_cache("webinars")
     await clear_cache("calendar")
 
-    return await webinar.serialize(True, True)
+    return await webinar.serialize(True, True, True, False)
 
 
 @router.delete(

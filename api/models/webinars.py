@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, Column, Integer, String
 from sqlalchemy.orm import Mapped, relationship
 
 from .lecturer_rating import LecturerRating
 from ..database.database import UTCDateTime
+from ..schemas import calendar
 from ..services.auth import get_userinfo
 from ..utils.utc import utcnow
 from api.database import Base, db, db_wrapper, select
@@ -36,23 +37,25 @@ class Webinar(Base):
         "WebinarParticipant", back_populates="webinar", lazy="selectin", cascade="all, delete-orphan"
     )
 
-    async def serialize(self, include_link: bool, instructor: bool) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "skill_id": self.skill_id,
-            "instructor": await get_userinfo(self.creator),
-            "rating": await LecturerRating.get_rating(self.creator, self.skill_id),
-            "creation_date": self.creation_date.timestamp(),
-            "name": self.name,
-            "description": self.description,
-            "admin_link": self.admin_link if include_link and instructor else None,
-            "link": self.link if include_link else None,
-            "start": self.start.timestamp(),
-            "end": self.end.timestamp(),
-            "max_participants": self.max_participants,
-            "price": self.price,
-            "participants": len(self.participants),
-        }
+    async def serialize(self, include_link: bool, instructor: bool, booked: bool, bookable: bool) -> calendar.Webinar:
+        return calendar.Webinar(
+            id=self.id,
+            skill_id=self.skill_id,
+            instructor=await get_userinfo(self.creator),
+            instructor_rating=await LecturerRating.get_rating(self.creator, self.skill_id),
+            creation_date=self.creation_date.timestamp(),
+            title=self.name,
+            description=self.description,
+            admin_link=self.admin_link if include_link and instructor else None,
+            link=self.link if include_link else None,
+            start=self.start.timestamp(),
+            duration=(self.end - self.start).total_seconds() // 60,
+            max_participants=self.max_participants,
+            price=self.price,
+            participants=len(self.participants),
+            booked=booked,
+            bookable=bookable,
+        )
 
 
 @db_wrapper
