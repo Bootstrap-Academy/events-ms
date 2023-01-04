@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 import random
 import string
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -14,6 +14,8 @@ from api.database import Base, db, db_wrapper, select
 from api.database.database import UTCDateTime
 from api.models.weekly_slots import WeeklySlot
 from api.services import shop
+from api.services.skills import add_xp
+from api.settings import settings
 from api.utils.utc import utcnow
 
 
@@ -98,10 +100,13 @@ async def clean_old_slots() -> None:
     now = utcnow()
     slot: Slot
     async for slot in await db.stream(select(Slot).where(Slot.end < now)):
-        if slot.booked and slot.event_type == EventType.EXAM and now - slot.end < timedelta(days=7):
-            continue
-        if slot.booked and slot.instructor_coins:
-            await shop.add_coins(slot.user_id, slot.instructor_coins)
+        # if slot.booked and slot.event_type == EventType.EXAM and now - slot.end < timedelta(days=7):
+        #     continue
+        if slot.booked and slot.booked_by is not None and slot.skill_id is not None:
+            if slot.instructor_coins:
+                await shop.add_coins(slot.user_id, slot.instructor_coins)
+            await add_xp(slot.user_id, slot.skill_id, settings.coaching_lecturer_xp)
+            await add_xp(slot.booked_by, slot.skill_id, settings.coaching_participant_xp)
         await db.delete(slot)
 
     weekly_slot: WeeklySlot

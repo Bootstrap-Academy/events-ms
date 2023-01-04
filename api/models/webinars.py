@@ -12,6 +12,7 @@ from ..database.database import UTCDateTime
 from ..schemas import calendar
 from ..services import shop
 from ..services.auth import get_userinfo
+from ..services.skills import add_xp
 from ..settings import settings
 from ..utils.utc import utcnow
 from api.database import Base, db, db_wrapper, select
@@ -69,7 +70,9 @@ async def clean_old_webinars() -> None:
             await LecturerRating.create(
                 webinar.creator, participant.user_id, webinar.skill_id, webinar.start, webinar.name
             )
+            await add_xp(participant.user_id, webinar.skill_id, settings.webinar_participant_xp)
         await shop.add_coins(webinar.creator, int(len(webinar.participants) * webinar.price * (1 - settings.event_fee)))
         if webinar.participants:
             await EmergencyCancel.delete(webinar.creator)
+        await add_xp(webinar.creator, webinar.skill_id, settings.webinar_lecturer_xp)
         await db.delete(webinar)

@@ -10,7 +10,7 @@ from api.database import db
 from api.exceptions.auth import admin_responses, verified_responses
 from api.exceptions.ratings import CouldNotSendMessageError, RatingNotFoundError
 from api.schemas.ratings import Unrated
-from api.schemas.user import User, UserInfo
+from api.schemas.user import User
 from api.services.auth import get_userinfo
 from api.settings import settings
 from api.utils.email import send_email

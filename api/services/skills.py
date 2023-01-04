@@ -49,6 +49,6 @@ async def get_lecturers(skill_id: str, level: int) -> set[str]:
         return set(response.json())
 
 
-async def complete_skill(user_id: str, skill_id: str) -> None:
+async def add_xp(user_id: str, skill_id: str, xp: int) -> None:
     async with InternalService.SKILLS.client as client:
-        await client.post(f"/skills/{user_id}/{skill_id}", json={"xp": settings.exam_xp, "complete": True})
+        await client.post(f"/skills/{user_id}/{skill_id}", json={"xp": xp})

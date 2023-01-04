@@ -28,8 +28,11 @@ class Settings(BaseSettings):
     rating_half_life: int = 60  # days
     rating_max_keep: int = 730  # days = 2 years
 
-    exam_price: int = 15000  # 150€ = 15000 MC
-    exam_xp: int = 500
+    webinar_participant_xp: int = 100
+    webinar_lecturer_xp: int = 100
+
+    coaching_participant_xp: int = 100
+    coaching_lecturer_xp: int = 100
 
     event_fee: float = 0.3
 
