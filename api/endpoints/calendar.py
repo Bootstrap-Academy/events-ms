@@ -57,8 +57,6 @@ async def get_webinars(
     start_before: int | None,
     duration_min: int | None,
     duration_max: int | None,
-    price_min: int | None,
-    price_max: int | None,
 ) -> list[Webinar]:
     events = []
     query = select(models.Webinar).where(models.Webinar.end > utcnow())
@@ -69,10 +67,6 @@ async def get_webinars(
     if skill_id:
         query = query.filter_by(skill_id=skill_id)
     query = _filter_time(query, models.Webinar, start_after, start_before, duration_min, duration_max)
-    if price_min:
-        query = query.where(models.Webinar.price >= price_min)
-    if price_max:
-        query = query.where(models.Webinar.price <= price_max)
 
     webinar: models.Webinar
     async for webinar in await db.stream(query):
@@ -91,7 +85,9 @@ async def get_webinars(
                 duration=(webinar.end - webinar.start).total_seconds() // 60,
                 price=webinar.price,
                 admin_link=webinar.admin_link if admin or user_id == webinar.creator else None,
-                link=webinar.link if admin or _booked else None,
+                link=webinar.link
+                if admin or user_id == webinar.creator or (_booked and webinar.start - utcnow() < timedelta(days=1))
+                else None,
                 instructor=await get_userinfo(webinar.creator),
                 instructor_rating=await models.LecturerRating.get_rating(webinar.creator, webinar.skill_id),
                 booked=_booked,
@@ -191,20 +187,15 @@ async def get_events(
     events: list[Webinar | Coaching] = []
     if type_ is None or type_ == EventType.WEBINAR:
         events += await get_webinars(
-            user_id,
-            admin,
-            title,
-            description,
-            skill_id,
-            start_after,
-            start_before,
-            duration_min,
-            duration_max,
-            price_min,
-            price_max,
+            user_id, admin, title, description, skill_id, start_after, start_before, duration_min, duration_max
         )
     if type_ is None or type_ == EventType.COACHING:
         events += await get_coachings(user_id, admin, start_after, start_before, duration_min, duration_max)
+
+    free = {ec.user_id async for ec in await db.stream(select(models.EmergencyCancel))}
+    for event in events:
+        if event.instructor and event.instructor.id in free:
+            event.price = 0
 
     f = iter(events)
     f = filter(lambda e: skill_id is None or skill_id == e.skill_id, f)
@@ -291,41 +282,95 @@ async def download_ics(
 )
 async def cancel_event(event_id: str, user: User = user_auth) -> Any:
     """
-    Cancel a coaching or exam.
+    Cancel a webinar or coaching.
 
     The user must either be the instructor or the participant, or an admin.
-    Webinars cannot be cancelled via this endpoint.
 
     *Requirements:* **VERIFIED**
     """
 
-    # todo: webinars
+    if await _try_cancel_webinar(event_id, user):
+        return True
+    if await _try_cancel_coaching(event_id, user):
+        return True
+    raise SlotNotFoundException
 
+
+async def _try_cancel_webinar(event_id: str, user: User = user_auth) -> bool:
+    webinar = await db.get(models.Webinar, id=event_id)
+    if webinar is None:
+        return False
+
+    participant = next((p for p in webinar.participants if p.user_id == user.id), None)
+    if not user.admin and not participant and webinar.creator != user.id:
+        return False
+
+    delta = webinar.start - utcnow()
+
+    if delta < timedelta(0):
+        # cannot cancel events that have already started
+        raise PermissionDeniedError
+
+    if participant:
+        if delta >= timedelta(days=7):
+            student_coins = webinar.price
+            instructor_coins = 0
+        elif delta >= timedelta(days=1):
+            student_coins = webinar.price // 2
+            instructor_coins = int(webinar.price * (1 - settings.event_fee) // 2)
+        else:
+            raise PermissionDeniedError
+
+        if student_coins:
+            await shop.add_coins(participant.user_id, student_coins)
+        if instructor_coins:
+            await shop.add_coins(webinar.creator, instructor_coins)
+
+        await db.delete(participant)
+        await clear_cache("calendar")
+        # todo: email?
+
+        return True
+
+    for participant in webinar.participants:
+        await shop.spend_coins(participant.user_id, webinar.price)
+
+    if webinar.participants:
+        await models.EmergencyCancel.create(webinar.creator)
+
+    await db.delete(webinar)
+    await clear_cache("calendar")
+    # todo: email
+
+    return True
+
+
+async def _try_cancel_coaching(event_id: str, user: User = user_auth) -> bool:
     slot = await db.get(models.Slot, id=event_id)
     if not slot or not slot.booked_by or slot.instructor_coins is None or slot.student_coins is None:
-        raise SlotNotFoundException
+        return False
 
     if user.id != slot.user_id and user.id != slot.booked_by and not user.admin:
-        raise SlotNotFoundException
+        return False
 
     delta = slot.start - utcnow()
-    if user.id == slot.booked_by and not user.admin and delta < timedelta(0):
-        raise PermissionDeniedError
-    if user.id == slot.user_id and not user.admin and delta < timedelta(days=1):
+    student_coins = instructor_coins = 0
+
+    if delta < timedelta(0):
+        # cannot cancel events that have already started
         raise PermissionDeniedError
 
-    if user.id != slot.booked_by or user.admin:
+    if user.id == slot.booked_by:  # student cancels
+        if delta >= timedelta(days=7):
+            student_coins = slot.student_coins
+        elif delta >= timedelta(days=1):
+            student_coins = slot.student_coins // 2
+            instructor_coins = slot.instructor_coins // 2
+        else:
+            raise PermissionDeniedError
+    elif user.id == slot.user_id and slot.booked:  # instructor cancels
         student_coins = slot.student_coins
-        instructor_coins = 0
-    elif delta >= timedelta(days=3):
-        student_coins = slot.student_coins
-        instructor_coins = 0
-    elif delta >= timedelta(days=1):
-        student_coins = slot.student_coins // 2
-        instructor_coins = slot.instructor_coins // 2
-    else:
-        student_coins = 0
-        instructor_coins = slot.instructor_coins
+        await models.EmergencyCancel.create(slot.user_id)
 
     if student_coins:
         await shop.add_coins(slot.booked_by, student_coins)

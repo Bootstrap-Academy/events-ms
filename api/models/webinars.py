@@ -6,10 +6,13 @@ from typing import TYPE_CHECKING
 from sqlalchemy import BigInteger, Column, Integer, String
 from sqlalchemy.orm import Mapped, relationship
 
+from .emergency_cancel import EmergencyCancel
 from .lecturer_rating import LecturerRating
 from ..database.database import UTCDateTime
 from ..schemas import calendar
+from ..services import shop
 from ..services.auth import get_userinfo
+from ..settings import settings
 from ..utils.utc import utcnow
 from api.database import Base, db, db_wrapper, select
 
@@ -66,4 +69,7 @@ async def clean_old_webinars() -> None:
             await LecturerRating.create(
                 webinar.creator, participant.user_id, webinar.skill_id, webinar.start, webinar.name
             )
+        await shop.add_coins(webinar.creator, int(len(webinar.participants) * webinar.price * (1 - settings.event_fee)))
+        if webinar.participants:
+            await EmergencyCancel.delete(webinar.creator)
         await db.delete(webinar)

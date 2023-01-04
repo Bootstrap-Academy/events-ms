@@ -102,7 +102,6 @@ async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     )
     await db.add(webinar)
 
-    await clear_cache("webinars")
     await clear_cache("calendar")
 
     return await webinar.serialize(True, True, True, False)
@@ -168,13 +167,11 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
     if len(webinar.participants) >= webinar.max_participants:
         raise AlreadyFullError
 
-    if not await shop.spend_coins(user.id, webinar.price):
+    if not await models.EmergencyCancel.exists(webinar.creator) and not await shop.spend_coins(user.id, webinar.price):
         raise NotEnoughCoinsError
-    await shop.add_coins(webinar.creator, int(webinar.price * (1 - settings.event_fee)))
 
     webinar.participants.append(models.WebinarParticipant(user_id=user.id, webinar_id=webinar.id))
 
-    await clear_cache("webinars")
     await clear_cache("calendar")
 
     if email := await get_email(user.id):
@@ -231,29 +228,6 @@ async def update_webinar(data: UpdateWebinar, user: User = user_auth, webinar: m
     if not user.admin:
         await check_price(user.id, webinar.skill_id, webinar.price, webinar.max_participants)
 
-    await clear_cache("webinars")
     await clear_cache("calendar")
 
     return await webinar.serialize(True, True, True, False)
-
-
-@router.delete(
-    "/webinars/{webinar_id}",
-    dependencies=[require_verified_email, can_manage_webinar],
-    responses=verified_responses(bool, WebinarNotFoundError, PermissionDeniedError),
-)
-async def delete_webinar(webinar: models.Webinar = get_webinar) -> Any:
-    """
-    Delete a webinar.
-
-    Can only be accessed by the webinar host or an admin.
-
-    *Requirements:* **VERIFIED**
-    """
-
-    await db.delete(webinar)
-
-    await clear_cache("webinars")
-    await clear_cache("calendar")
-
-    return True
