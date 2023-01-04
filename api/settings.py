@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     smtp_tls: bool = False
     smtp_starttls: bool = True
 
+    contact_email: str | None = None
+
     database_url: str = Field(
         "mysql+aiomysql://fastapi:fastapi@mariadb:3306/fastapi",
         regex=r"^(mysql\+aiomysql|postgresql\+asyncpg|sqlite\+aiosqlite)://.*$",
