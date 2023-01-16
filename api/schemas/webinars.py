@@ -16,6 +16,7 @@ class CreateWebinar(BaseModel):
 class UpdateWebinar(BaseModel):
     name: str | None = Field(description="Name of the webinar")
     description: str | None = Field(description="Description of the webinar")
+    admin_link: str | None = Field(description="Meeting link for the instructor")
     link: str | None = Field(description="Link to the webinar")
     start: int | None = Field(description="Start date")
     duration: int | None = Field(gt=0, description="Duration of the webinar in minutes")

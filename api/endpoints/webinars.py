@@ -207,6 +207,9 @@ async def update_webinar(data: UpdateWebinar, user: User = user_auth, webinar: m
     if data.description is not None and data.description != webinar.description:
         webinar.description = data.description
 
+    if data.admin_link is not None and data.admin_link != webinar.admin_link:
+        webinar.admin_link = data.admin_link
+
     if data.link is not None and data.link != webinar.link:
         webinar.link = data.link
 
