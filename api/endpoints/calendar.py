@@ -278,7 +278,7 @@ async def download_ics(
 @router.delete(
     "/calendar/{event_id}",
     dependencies=[require_verified_email],
-    responses=verified_responses(bool, SlotNotFoundException),
+    responses=verified_responses(bool, SlotNotFoundException, PermissionDeniedError),
 )
 async def cancel_event(event_id: str, user: User = user_auth) -> Any:
     """
