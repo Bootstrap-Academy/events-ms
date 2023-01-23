@@ -272,7 +272,7 @@ async def download_ics(
         user_id, admin, type_, None, None, skill_id, None, None, None, None, None, None, booked, bookable
     )
 
-    return Response(create_ics(events), media_type="text/calendar")
+    return Response(await create_ics(events), media_type="text/calendar")
 
 
 @router.delete(
