@@ -4,6 +4,7 @@ import icalendar
 
 from api.schemas.calendar import Coaching, EventType, Webinar
 from api.services.skills import get_skills
+from api.settings import settings
 from api.utils.utc import utcfromtimestamp
 
 
@@ -34,6 +35,8 @@ async def create_ics(events: list[Webinar | Coaching]) -> bytes:
             event.add("location", e.admin_link)
         elif e.link:
             event.add("location", e.link)
+        else:
+            event.add("location", settings.event_url.format(id=e.id))
         cal.add_component(event)
 
     return cast(bytes, cal.to_ical())

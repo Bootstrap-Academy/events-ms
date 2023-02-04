@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     webinar_registration_url: str = ""
     event_cancel_url: str = ""
 
+    event_url: str = ""
+
     public_base_url: str = "http://localhost:8000"
 
     internal_jwt_ttl: int = 10

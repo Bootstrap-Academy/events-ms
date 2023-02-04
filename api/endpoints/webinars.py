@@ -1,5 +1,6 @@
 """Endpoints related to webinars."""
 
+from datetime import timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -123,8 +124,11 @@ async def get_webinar_by_id(webinar: models.Webinar = get_webinar, user: User = 
 
     _booked = user.id == webinar.creator or any(participant.user_id == user.id for participant in webinar.participants)
     _bookable = not _booked and utcnow() < webinar.start and len(webinar.participants) < webinar.max_participants
+    include_link = (
+        user.admin or user.id == webinar.creator or (_booked and webinar.start - utcnow() < timedelta(days=1))
+    )
 
-    return await webinar.serialize(user.admin or _booked, user.admin or user.id == webinar.creator, _booked, _bookable)
+    return await webinar.serialize(include_link, user.admin or user.id == webinar.creator, _booked, _bookable)
 
 
 @router.get(
@@ -174,17 +178,18 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
 
     await clear_cache("calendar")
 
+    include_link = webinar.start - utcnow() < timedelta(days=1)
     if email := await get_email(user.id):
         await BOOKED_WEBINAR.send(
             email,
             title=webinar.name,
             date=webinar.start.strftime("%d.%m.%Y"),
             time=webinar.start.strftime("%H:%M"),
-            link=webinar.link,
+            link=webinar.link if include_link else settings.event_url.format(id=webinar.id),
             coins=webinar.price,
         )
 
-    return await webinar.serialize(True, False, True, False)
+    return await webinar.serialize(include_link, False, True, False)
 
 
 @router.patch(
