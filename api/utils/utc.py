@@ -7,3 +7,7 @@ def utcnow() -> datetime:
 
 def utcfromtimestamp(ts: float) -> datetime:
     return datetime.utcfromtimestamp(ts).replace(tzinfo=timezone.utc)
+
+
+def datetime_link(dt: datetime) -> str:
+    return f"https://www.timeanddate.com/worldclock/fixedtime.html?iso={dt.replace(tzinfo=None).isoformat()}"

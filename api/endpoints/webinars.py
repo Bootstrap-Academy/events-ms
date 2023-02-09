@@ -28,7 +28,7 @@ from api.services.skills import get_skill_levels
 from api.settings import settings
 from api.utils.cache import clear_cache
 from api.utils.email import BOOKED_WEBINAR
-from api.utils.utc import utcfromtimestamp, utcnow
+from api.utils.utc import datetime_link, utcfromtimestamp, utcnow
 
 
 router = APIRouter()
@@ -185,6 +185,7 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
             title=webinar.name,
             date=webinar.start.strftime("%d.%m.%Y"),
             time=webinar.start.strftime("%H:%M"),
+            datetime_link=datetime_link(webinar.start),
             link=webinar.link if include_link else settings.event_url.format(id=webinar.id),
             coins=webinar.price,
         )

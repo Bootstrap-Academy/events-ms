@@ -21,7 +21,7 @@ from api.services.skills import get_skill_levels
 from api.settings import settings
 from api.utils.cache import clear_cache
 from api.utils.email import BOOKED_COACHING
-from api.utils.utc import utcnow
+from api.utils.utc import datetime_link, utcnow
 
 
 router = APIRouter()
@@ -69,6 +69,7 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
             instructor=instructor.display_name,
             date=slot.start.strftime("%d.%m.%Y"),
             time=slot.start.strftime("%H:%M"),
+            datetime_link=datetime_link(slot.start),
             link=slot.link,
             coins=coaching.price,
         )
