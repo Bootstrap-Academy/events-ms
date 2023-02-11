@@ -10,7 +10,7 @@ class CreateWebinar(BaseModel):
     start: int = Field(description="Start date")
     duration: int = Field(gt=0, lt=24 * 60, description="Duration of the webinar in minutes")
     max_participants: int = Field(ge=4, le=50, description="Maximum number of participants")
-    price: int = Field(ge=0, description="Price of the webinar")
+    price: int = Field(ge=0, le=0, description="Price of the webinar")  # TODO: remove le=0
 
 
 class UpdateWebinar(BaseModel):
