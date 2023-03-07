@@ -3,7 +3,6 @@ from typing import cast
 from pydantic import BaseModel, Extra
 
 from api.services.internal import InternalService
-from api.settings import settings
 from api.utils.cache import redis_cached
 
 

@@ -87,7 +87,6 @@ async def get_weekly_slots(user_id: str = get_user(require_self_or_admin=True)) 
     *Requirements:* **VERIFIED** and (**SELF** or **ADMIN**)
     """
 
-    slot: models.WeeklySlot
     return [slot.serialize for slot in await db.all(filter_by(models.WeeklySlot, user_id=user_id))]
 
 
