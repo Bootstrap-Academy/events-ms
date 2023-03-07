@@ -171,7 +171,9 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
     if len(webinar.participants) >= webinar.max_participants:
         raise AlreadyFullError
 
-    if not await models.EmergencyCancel.exists(webinar.creator) and not await shop.spend_coins(user.id, webinar.price):
+    if not await models.EmergencyCancel.exists(webinar.creator) and not await shop.spend_coins(
+        user.id, webinar.price, f"Webinar '{webinar.name}'"
+    ):
         raise NotEnoughCoinsError
 
     webinar.participants.append(models.WebinarParticipant(user_id=user.id, webinar_id=webinar.id))

@@ -71,7 +71,9 @@ async def clean_old_webinars() -> None:
                 webinar.creator, participant.user_id, webinar.skill_id, webinar.start, webinar.name
             )
             await add_xp(participant.user_id, webinar.skill_id, settings.webinar_participant_xp)
-        await shop.add_coins(webinar.creator, int(len(webinar.participants) * webinar.price * (1 - settings.event_fee)))
+        await shop.add_coins(
+            webinar.creator, int(len(webinar.participants) * webinar.price * (1 - settings.event_fee)), "Webinar", True
+        )
         if webinar.participants:
             await EmergencyCancel.delete(webinar.creator)
         await add_xp(webinar.creator, webinar.skill_id, settings.webinar_lecturer_xp)

@@ -56,7 +56,9 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
     if not instructor:
         raise CoachingNotFoundError
 
-    if not await models.EmergencyCancel.delete(slot.user_id) and not await shop.spend_coins(user.id, coaching.price):
+    if not await models.EmergencyCancel.delete(slot.user_id) and not await shop.spend_coins(
+        user.id, coaching.price, "Coaching"
+    ):
         raise NotEnoughCoinsError
 
     slot.book(user.id, EventType.COACHING, coaching.price, int(coaching.price * (1 - settings.event_fee)), skill_id)

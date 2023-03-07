@@ -322,9 +322,9 @@ async def _try_cancel_webinar(event_id: str, user: User = user_auth) -> bool:
             raise PermissionDeniedError
 
         if student_coins:
-            await shop.add_coins(participant.user_id, student_coins)
+            await shop.add_coins(participant.user_id, student_coins, f"Cancel webinar '{webinar.name}'", False)
         if instructor_coins:
-            await shop.add_coins(webinar.creator, instructor_coins)
+            await shop.add_coins(webinar.creator, instructor_coins, f"Cancel webinar '{webinar.name}'", False)
 
         await db.delete(participant)
         await clear_cache("calendar")
@@ -333,7 +333,7 @@ async def _try_cancel_webinar(event_id: str, user: User = user_auth) -> bool:
         return True
 
     for participant in webinar.participants:
-        await shop.spend_coins(participant.user_id, webinar.price)
+        await shop.spend_coins(participant.user_id, webinar.price, f"Webinar {webinar.name}")
 
     if webinar.participants:
         await models.EmergencyCancel.create(webinar.creator)
@@ -373,9 +373,9 @@ async def _try_cancel_coaching(event_id: str, user: User = user_auth) -> bool:
         await models.EmergencyCancel.create(slot.user_id)
 
     if student_coins:
-        await shop.add_coins(slot.booked_by, student_coins)
+        await shop.add_coins(slot.booked_by, student_coins, "Cancel coaching", False)
     if instructor_coins:
-        await shop.add_coins(slot.user_id, instructor_coins)
+        await shop.add_coins(slot.user_id, instructor_coins, "Cancel coaching", False)
 
     slot.cancel()
     # todo: email

@@ -104,7 +104,7 @@ async def clean_old_slots() -> None:
         #     continue
         if slot.booked and slot.booked_by is not None and slot.skill_id is not None:
             if slot.instructor_coins:
-                await shop.add_coins(slot.user_id, slot.instructor_coins)
+                await shop.add_coins(slot.user_id, slot.instructor_coins, "Coaching", True)
             await add_xp(slot.user_id, slot.skill_id, settings.coaching_lecturer_xp)
             await add_xp(slot.booked_by, slot.skill_id, settings.coaching_participant_xp)
         await db.delete(slot)
