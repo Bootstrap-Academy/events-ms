@@ -52,6 +52,7 @@ async def get_webinars(
     admin: bool,
     title: str | None,
     description: str | None,
+    instructor_id: str | None,
     skill_id: str | None,
     start_after: int | None,
     start_before: int | None,
@@ -64,6 +65,8 @@ async def get_webinars(
         query = query.where(func.lower(models.Webinar.name).contains(title.lower(), autoescape=True))
     if description:
         query = query.where(func.lower(models.Webinar.description).contains(description.lower(), autoescape=True))
+    if instructor_id:
+        query = query.filter_by(creator=instructor_id)
     if skill_id:
         query = query.filter_by(skill_id=skill_id)
     query = _filter_time(query, models.Webinar, start_after, start_before, duration_min, duration_max)
@@ -103,6 +106,7 @@ async def get_webinars(
 async def get_coachings(
     user_id: str,
     admin: bool,
+    instructor_id: str | None,
     start_after: int | None,
     start_before: int | None,
     duration_min: int | None,
@@ -111,6 +115,8 @@ async def get_coachings(
     events = []
     query = select(models.Slot).where(models.Slot.end > utcnow())
     query = _filter_time(query, models.Slot, start_after, start_before, duration_min, duration_max)
+    if instructor_id:
+        query = query.filter_by(user_id=instructor_id)
 
     coachings: dict[str, dict[str, int]] = {}
     coaching: models.Coaching
@@ -174,6 +180,7 @@ async def get_events(
     type_: EventType | None,
     title: str | None,
     description: str | None,
+    instructor_id: str | None,
     skill_id: str | None,
     start_after: int | None,
     start_before: int | None,
@@ -187,10 +194,21 @@ async def get_events(
     events: list[Webinar | Coaching] = []
     if type_ is None or type_ == EventType.WEBINAR:
         events += await get_webinars(
-            user_id, admin, title, description, skill_id, start_after, start_before, duration_min, duration_max
+            user_id,
+            admin,
+            title,
+            description,
+            instructor_id,
+            skill_id,
+            start_after,
+            start_before,
+            duration_min,
+            duration_max,
         )
     if type_ is None or type_ == EventType.COACHING:
-        events += await get_coachings(user_id, admin, start_after, start_before, duration_min, duration_max)
+        events += await get_coachings(
+            user_id, admin, instructor_id, start_after, start_before, duration_min, duration_max
+        )
 
     free = {ec.user_id async for ec in await db.stream(select(models.EmergencyCancel))}
     for event in events:
@@ -212,6 +230,7 @@ async def get_calendar(
     type_: EventType | None = Query(None, alias="type", description="Return only events of this type"),
     title: str | None = Query(None, description="Return only events with this title"),
     description: str | None = Query(None, description="Return only events with this description"),
+    instructor_id: str | None = Query(None, description="Return only events created by this user"),
     skill_id: str | None = Query(None, description="Return only events with this skill id"),
     start_after: int | None = Query(None, description="Return only events that start after this timestamp"),
     start_before: int | None = Query(None, description="Return only events that start before this timestamp"),
@@ -235,6 +254,7 @@ async def get_calendar(
         type_,
         title,
         description,
+        instructor_id,
         skill_id,
         start_after,
         start_before,
@@ -269,7 +289,7 @@ async def download_ics(
     admin = await is_admin(user_id)
 
     events = await get_events(
-        user_id, admin, type_, None, None, skill_id, None, None, None, None, None, None, booked, bookable
+        user_id, admin, type_, None, None, None, skill_id, None, None, None, None, None, None, booked, bookable
     )
 
     return Response(await create_ics(events), media_type="text/calendar")
