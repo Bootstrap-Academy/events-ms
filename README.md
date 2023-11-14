@@ -29,7 +29,7 @@ If you would like to submit a bug report or feature request, or are looking for 
         redis:alpine
     ```
 7. Run `poe migrate` to run the database migrations.
-8. Run `poe api` to start the microservice. You can find the automatically generated swagger documentation on http://localhost:8000/docs.
+8. Run `poe api` to start the microservice. You can find the automatically generated swagger documentation on http://localhost:8004/docs.
 
 ## Poetry Scripts
 ```bash
