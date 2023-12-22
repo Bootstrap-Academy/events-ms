@@ -1,7 +1,7 @@
 """Endpoints related to 1-on-1 coachings"""
 
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter
 
@@ -81,9 +81,9 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
         title=None,
         description=None,
         skill_id=slot.skill_id,
-        start=slot.start.timestamp(),
-        duration=(slot.end - slot.start).total_seconds() // 60,
-        price=slot.student_coins,
+        start=int(slot.start.timestamp()),
+        duration=int((slot.end - slot.start).total_seconds()) // 60,
+        price=cast(int, slot.student_coins),
         admin_link=None,
         link=slot.link,
         instructor=await get_userinfo(slot.user_id),

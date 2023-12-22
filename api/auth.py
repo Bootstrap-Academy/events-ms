@@ -18,7 +18,7 @@ def get_token(request: Request) -> str:
 
 class HTTPAuth(SecurityBase):
     def __init__(self) -> None:
-        self.model = HTTPBearer()
+        self.model = HTTPBearer(scheme="bearer")
         self.scheme_name = self.__class__.__name__
 
     async def __call__(self, request: Request) -> Any:

@@ -1,6 +1,6 @@
 """Endpoints for rating lecturers."""
 
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Body
 
@@ -10,7 +10,7 @@ from api.database import db
 from api.exceptions.auth import admin_responses, verified_responses
 from api.exceptions.ratings import CouldNotSendMessageError, RatingNotFoundError
 from api.schemas.ratings import Unrated
-from api.schemas.user import User
+from api.schemas.user import User, UserInfo
 from api.services.auth import get_userinfo
 from api.settings import settings
 from api.utils.email import send_email
@@ -37,10 +37,10 @@ async def list_unrated(user: User = user_auth) -> Any:
     return [
         Unrated(
             id=x.id,
-            instructor=await get_userinfo(x.lecturer_id),
+            instructor=cast(UserInfo, await get_userinfo(x.lecturer_id)),
             skill_id=x.skill_id,
-            webinar_timestamp=x.webinar_timestamp.timestamp(),
-            webinar_name=x.webinar_name,
+            webinar_timestamp=int(x.webinar_timestamp.timestamp()),
+            webinar_name=cast(str, x.webinar_name),
         )
         for x in await models.LecturerRating.list_unrated(user.id)
     ]
