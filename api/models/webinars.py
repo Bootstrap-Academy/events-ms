@@ -44,6 +44,7 @@ class Webinar(Base):
     async def serialize(self, include_link: bool, instructor: bool, booked: bool, bookable: bool) -> calendar.Webinar:
         return calendar.Webinar(
             id=self.id,
+            type=calendar.EventType.WEBINAR,
             skill_id=self.skill_id,
             instructor=await get_userinfo(self.creator),
             instructor_rating=await LecturerRating.get_rating(self.creator, self.skill_id),

@@ -78,6 +78,7 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
 
     return calendar.Coaching(
         id=slot.id,
+        type=calendar.EventType.COACHING,
         title=None,
         description=None,
         skill_id=slot.skill_id,
