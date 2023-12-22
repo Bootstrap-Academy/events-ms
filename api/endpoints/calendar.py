@@ -81,6 +81,7 @@ async def get_webinars(
         events.append(
             Webinar(
                 id=webinar.id,
+                type=EventType.WEBINAR,
                 title=webinar.name,
                 description=webinar.description,
                 skill_id=webinar.skill_id,
@@ -129,6 +130,7 @@ async def get_coachings(
             events.append(
                 Coaching(
                     id=slot.id,
+                    type=EventType.COACHING,
                     title=None,
                     description=None,
                     skill_id=slot.skill_id,
@@ -156,6 +158,7 @@ async def get_coachings(
             events.append(
                 Coaching(
                     id=slot.id,
+                    type=EventType.COACHING,
                     title=None,
                     description=None,
                     skill_id=skill,

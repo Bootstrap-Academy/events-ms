@@ -1,7 +1,7 @@
 from typing import Any, Awaitable, Callable
 
 from fastapi import Depends, Request
-from fastapi.openapi.models import HTTPBearer
+from fastapi.openapi.models import HTTPBearer, SecuritySchemeType
 from fastapi.security.base import SecurityBase
 from pydantic import ValidationError
 
@@ -18,7 +18,7 @@ def get_token(request: Request) -> str:
 
 class HTTPAuth(SecurityBase):
     def __init__(self) -> None:
-        self.model = HTTPBearer(scheme="bearer")
+        self.model = HTTPBearer(type=SecuritySchemeType.http, scheme="bearer")
         self.scheme_name = self.__class__.__name__
 
     async def __call__(self, request: Request) -> Any:
