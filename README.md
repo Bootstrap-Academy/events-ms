@@ -1,3 +1,10 @@
+[![check](https://github.com/Bootstrap-Academy/events-ms/actions/workflows/check.yml/badge.svg)](https://github.com/Bootstrap-Academy/events-ms/actions/workflows/check.yml)
+[![test](https://github.com/Bootstrap-Academy/events-ms/actions/workflows/test.yml/badge.svg)](https://github.com/Bootstrap-Academy/events-ms/actions/workflows/test.yml)
+[![build](https://github.com/Bootstrap-Academy/events-ms/actions/workflows/build.yml/badge.svg)](https://github.com/Bootstrap-Academy/events-ms/actions/workflows/build.yml) <!--
+https://app.codecov.io/gh/Bootstrap-Academy/events-ms/settings/badge
+[![codecov](https://codecov.io/gh/Bootstrap-Academy/events-ms/branch/develop/graph/badge.svg?token=changeme)](https://codecov.io/gh/Bootstrap-Academy/events-ms) -->
+![Version](https://img.shields.io/github/v/tag/Bootstrap-Academy/events-ms?include_prereleases&label=version)
+
 # Bootstrap Academy Events Microservice
 The official events microservice of [Bootstrap Academy](https://bootstrap.academy/).
 
