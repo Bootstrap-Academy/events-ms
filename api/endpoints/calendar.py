@@ -2,7 +2,7 @@
 
 import hmac
 from datetime import timedelta
-from typing import Any, Type
+from typing import Any, Type, cast
 
 from fastapi import APIRouter, Path, Query
 from sqlalchemy import func
@@ -84,8 +84,8 @@ async def get_webinars(
                 title=webinar.name,
                 description=webinar.description,
                 skill_id=webinar.skill_id,
-                start=webinar.start.timestamp(),
-                duration=(webinar.end - webinar.start).total_seconds() // 60,
+                start=int(webinar.start.timestamp()),
+                duration=int((webinar.end - webinar.start).total_seconds()) // 60,
                 price=webinar.price,
                 admin_link=webinar.admin_link if admin or user_id == webinar.creator else None,
                 link=webinar.link
@@ -95,7 +95,7 @@ async def get_webinars(
                 instructor_rating=await models.LecturerRating.get_rating(webinar.creator, webinar.skill_id),
                 booked=_booked,
                 bookable=_bookable,
-                creation_date=webinar.creation_date.timestamp(),
+                creation_date=int(webinar.creation_date.timestamp()),
                 max_participants=webinar.max_participants,
                 participants=len(webinar.participants),
             )
@@ -132,9 +132,9 @@ async def get_coachings(
                     title=None,
                     description=None,
                     skill_id=slot.skill_id,
-                    start=slot.start.timestamp(),
-                    duration=(slot.end - slot.start).total_seconds() // 60,
-                    price=slot.student_coins,
+                    start=int(slot.start.timestamp()),
+                    duration=int((slot.end - slot.start).total_seconds()) // 60,
+                    price=cast(int, slot.student_coins),
                     admin_link=slot.admin_link if admin or user_id == slot.user_id else None,
                     link=slot.link if admin or user_id in (slot.user_id, slot.booked_by) else None,
                     instructor=await get_userinfo(slot.user_id),
@@ -159,8 +159,8 @@ async def get_coachings(
                     title=None,
                     description=None,
                     skill_id=skill,
-                    start=slot.start.timestamp(),
-                    duration=(slot.end - slot.start).total_seconds() // 60,
+                    start=int(slot.start.timestamp()),
+                    duration=int((slot.end - slot.start).total_seconds()) // 60,
                     price=price,
                     admin_link=None,
                     link=None,
