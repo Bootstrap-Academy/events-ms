@@ -42,17 +42,16 @@ if settings.debug:
     app.middleware("http")(check_responses)
 
 
-def setup_app() -> None:
-    add_endpoint_links_to_openapi_docs(app.openapi())
+add_endpoint_links_to_openapi_docs(app.openapi())
 
-    if settings.sentry_dsn:
-        logger.debug("initializing sentry")
-        setup_sentry(app, settings.sentry_dsn, "events-ms", __version__)
+if settings.sentry_dsn:
+    logger.debug("initializing sentry")
+    setup_sentry(app, settings.sentry_dsn, "events-ms", __version__)
 
-    if settings.debug:
-        app.add_middleware(
-            CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
-        )
+if settings.debug:
+    app.add_middleware(
+        CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+    )
 
 
 @app.middleware("http")
@@ -79,8 +78,6 @@ async def cleanup_loop() -> None:
 
 @app.on_event("startup")
 async def on_startup() -> None:
-    setup_app()
-
     asyncio.create_task(cleanup_loop())
 
 
