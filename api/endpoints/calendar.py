@@ -89,9 +89,11 @@ async def get_webinars(
                 duration=int((webinar.end - webinar.start).total_seconds()) // 60,
                 price=webinar.price,
                 admin_link=webinar.admin_link if admin or user_id == webinar.creator else None,
-                link=webinar.link
-                if admin or user_id == webinar.creator or (_booked and webinar.start - utcnow() < timedelta(days=1))
-                else None,
+                link=(
+                    webinar.link
+                    if admin or user_id == webinar.creator or (_booked and webinar.start - utcnow() < timedelta(days=1))
+                    else None
+                ),
                 instructor=await get_userinfo(webinar.creator),
                 instructor_rating=await models.LecturerRating.get_rating(webinar.creator, webinar.skill_id),
                 booked=_booked,
@@ -143,9 +145,11 @@ async def get_coachings(
                     instructor_rating=await models.LecturerRating.get_rating(slot.user_id, slot.skill_id),
                     booked=True,
                     bookable=False,
-                    student=await get_userinfo(slot.booked_by)
-                    if admin or user_id in (slot.user_id, slot.booked_by)
-                    else None,
+                    student=(
+                        await get_userinfo(slot.booked_by)
+                        if admin or user_id in (slot.user_id, slot.booked_by)
+                        else None
+                    ),
                 )
             )
             continue
