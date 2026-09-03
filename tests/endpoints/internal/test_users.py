@@ -58,3 +58,37 @@ async def test__delete_user__wrong_audience(client: AsyncClient, session: AsyncS
     response = await client.delete(f"/_internal/users/{USER}", headers={"Authorization": token})
 
     assert response.status_code == 401
+
+
+async def test__export_user(client: AsyncClient, session: AsyncSession) -> None:
+    await db.add(Coaching(user_id=USER, skill_id="test", price=42))
+    await db.add(Coaching(user_id="other", skill_id="test", price=1337))
+
+    response = await client.get(f"/_internal/users/{USER}/export", headers={"Authorization": _internal_token()})
+
+    assert response.status_code == 200
+    assert response.json()["coachings"] == [{"skill_id": "test", "price": 42}]
+
+
+async def test__export_user__unknown_user(client: AsyncClient, session: AsyncSession) -> None:
+    await db.add(Coaching(user_id="other", skill_id="test", price=42))
+
+    response = await client.get("/_internal/users/unknown/export", headers={"Authorization": _internal_token()})
+
+    assert response.status_code == 200
+    assert response.json()["coachings"] == []
+    assert response.json()["emergency_cancel"] is False
+
+
+async def test__export_user__unauthorized(client: AsyncClient, session: AsyncSession) -> None:
+    response = await client.get(f"/_internal/users/{USER}/export")
+
+    assert response.status_code == 401
+
+
+async def test__export_user__wrong_audience(client: AsyncClient, session: AsyncSession) -> None:
+    token = encode_jwt({"aud": "skills"}, timedelta(seconds=10))
+
+    response = await client.get(f"/_internal/users/{USER}/export", headers={"Authorization": token})
+
+    assert response.status_code == 401
