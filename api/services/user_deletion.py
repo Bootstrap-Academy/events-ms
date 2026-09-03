@@ -13,7 +13,9 @@ from api.models import (
     WebinarParticipant,
     WeeklySlot,
 )
+from api.services import shop
 from api.utils.cache import clear_cache
+from api.utils.utc import utcnow
 
 
 logger = get_logger(__name__)
@@ -27,8 +29,10 @@ async def delete_user_data(user_id: str) -> None:
     Delete everything that belongs to a user from the database.
 
     Content the user has created (webinars, coachings and the slots they offer as a lecturer) is deleted, whereas
-    bookings of events that are owned by somebody else are cancelled. Has to be called inside a database context so
-    that all deletions happen in a single transaction.
+    bookings of events that are owned by somebody else are cancelled. Other users who have paid for one of the
+    deleted events and would not have received anything for it are refunded, just like they are when the lecturer
+    cancels the event themselves. Has to be called inside a database context so that all deletions happen in a single
+    transaction.
     """
 
     counts = dict.fromkeys(
@@ -45,11 +49,17 @@ async def delete_user_data(user_id: str) -> None:
         ],
         0,
     )
-    cancelled_bookings = 0
+    cancelled_bookings = refunds = 0
+    now = utcnow()
 
     # webinars created by the user, including the participants of these webinars
     webinar: Webinar
     async for webinar in await db.stream(filter_by(Webinar, creator=user_id)):
+        # the participants have paid for a webinar which is not going to take place anymore
+        if webinar.start > now and webinar.price:
+            for booked in webinar.participants:
+                await shop.add_coins(booked.user_id, webinar.price, f"Cancel webinar '{webinar.name}'", False)
+                refunds += 1
         counts[WebinarParticipant.__tablename__] += len(webinar.participants)
         counts[Webinar.__tablename__] += 1
         await db.delete(webinar)
@@ -63,6 +73,10 @@ async def delete_user_data(user_id: str) -> None:
     # slots the user offers as a lecturer
     slot: Slot
     async for slot in await db.stream(filter_by(Slot, user_id=user_id)):
+        # the student has paid for a coaching which is not going to take place anymore
+        if slot.booked_by is not None and slot.start > now and slot.student_coins:
+            await shop.add_coins(slot.booked_by, slot.student_coins, "Cancel coaching", False)
+            refunds += 1
         counts[Slot.__tablename__] += 1
         await db.delete(slot)
 
@@ -111,7 +125,8 @@ async def delete_user_data(user_id: str) -> None:
         await clear_cache(prefix)
 
     logger.info(
-        "deleted user data (%s, cancelled bookings: %s)",
+        "deleted user data (%s, cancelled bookings: %s, refunds: %s)",
         ", ".join(f"{table}: {cnt}" for table, cnt in counts.items()),
         cancelled_bookings,
+        refunds,
     )
