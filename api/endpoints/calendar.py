@@ -1,6 +1,5 @@
 """Endpoints related to the calendar."""
 
-import hmac
 from datetime import timedelta
 from typing import Any, Type, cast
 
@@ -14,7 +13,7 @@ from api.auth import require_verified_email, user_auth
 from api.database import db, select
 from api.exceptions.auth import PermissionDeniedError, verified_responses
 from api.exceptions.slots import SlotNotFoundException
-from api.schemas.calendar import Calendar, Coaching, EventType, Webinar
+from api.schemas.calendar import Calendar, CalendarToken, Coaching, EventType, Webinar
 from api.schemas.user import User
 from api.services import shop
 from api.services.auth import get_userinfo, is_admin
@@ -273,10 +272,22 @@ async def get_calendar(
         bookable,
     )
 
-    return Calendar(
-        ics_token=f"{user.id}_" + hmac.digest(settings.calendar_secret.encode(), user.id.encode(), "sha256").hex(),
-        events=events,
-    )
+    return Calendar(ics_token=(await models.CalendarToken.get_or_create(user.id)).token, events=events)
+
+
+@router.post(
+    "/calendar/token/rotate", dependencies=[require_verified_email], responses=verified_responses(CalendarToken)
+)
+async def rotate_ics_token(user: User = user_auth) -> Any:
+    """
+    Create a new token for the ics calendar feed of the user and invalidate the previous one.
+
+    Calendar clients that use the old subscription url stop receiving updates immediately.
+
+    *Requirements:* **VERIFIED**
+    """
+
+    return CalendarToken(ics_token=(await models.CalendarToken.rotate(user.id)).token)
 
 
 @router.get("/calendar/{token}/academy.ics")
@@ -285,12 +296,12 @@ async def download_ics(
     skill_id: str | None = Query(None, description="Return only events with this skill id"),
     booked: bool | None = Query(None, description="Return only events that the user has booked"),
     bookable: bool | None = Query(None, description="Return only events that the user can book"),
-    token: str = Path(regex=r"^[^_]+_[^_]+$"),
+    token: str = Path(regex=r"^[A-Za-z0-9_-]{16,128}$"),
 ) -> Any:
-    """wip"""
+    """Return the calendar of the user the token belongs to as an ics file."""
 
-    user_id, token = token.split("_")
-    if token != hmac.digest(settings.calendar_secret.encode(), user_id.encode(), "sha256").hex():
+    user_id = await models.CalendarToken.get_user_id(token)
+    if user_id is None:
         return Response(status_code=401)
 
     admin = await is_admin(user_id)
