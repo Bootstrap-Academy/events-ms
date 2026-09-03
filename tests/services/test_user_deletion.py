@@ -84,6 +84,11 @@ def clear_cache_patch(mocker: MockerFixture) -> AsyncMock:
     return mocker.patch("api.services.user_deletion.clear_cache", AsyncMock())
 
 
+@pytest.fixture(autouse=True)
+def add_coins_patch(mocker: MockerFixture) -> AsyncMock:
+    return mocker.patch("api.services.shop.add_coins", AsyncMock(return_value=True))
+
+
 @pytest.fixture
 async def data(session: AsyncSession) -> None:
     # webinars, including the ones the users have booked
@@ -110,6 +115,22 @@ async def data(session: AsyncSession) -> None:
     await db.add(_rating("rating-lecturer", USER, None))
     await db.add(_rating("rating-participant", OTHER, USER))
     await db.add(_rating("rating-other", OTHER, OTHER))
+
+
+@pytest.fixture
+async def past_data(session: AsyncSession) -> None:
+    """Events of the user which have already started, so nobody is refunded for them."""
+
+    webinar = _webinar("webinar-past", USER)
+    webinar.start = utcnow() - timedelta(hours=2)
+    webinar.end = utcnow() - timedelta(hours=1)
+    await db.add(webinar)
+    await db.add(WebinarParticipant(webinar_id="webinar-past", user_id=OTHER))
+
+    slot = _slot("slot-past-booked", USER, OTHER)
+    slot.start = utcnow() - timedelta(hours=2)
+    slot.end = utcnow() - timedelta(hours=1)
+    await db.add(slot)
 
 
 async def _all(cls: Any) -> list[Any]:
@@ -185,3 +206,44 @@ async def test__delete_user_data__clears_cache(data: None, clear_cache_patch: As
     await delete_user_data(USER)
 
     assert clear_cache_patch.call_args_list == [call(prefix) for prefix in USER_CACHE_PREFIXES]
+
+
+async def test__delete_user_data__refunds_third_parties(data: None, add_coins_patch: AsyncMock) -> None:
+    await delete_user_data(USER)
+
+    assert add_coins_patch.await_args_list == [
+        # OTHER has registered for the webinar the deleted user created
+        call(OTHER, 1337, "Cancel webinar 'test webinar'", False),
+        # OTHER has booked the coaching slot the deleted user offered
+        call(OTHER, 42, "Cancel coaching", False),
+    ]
+
+
+async def test__delete_user_data__does_not_refund_the_deleted_user(data: None, add_coins_patch: AsyncMock) -> None:
+    """The bookings of the deleted user are their own loss; only third parties get their coins back."""
+
+    await delete_user_data(USER)
+
+    assert all(c.args[0] != USER for c in add_coins_patch.await_args_list)
+
+
+async def test__delete_user_data__does_not_refund_past_events(past_data: None, add_coins_patch: AsyncMock) -> None:
+    await delete_user_data(USER)
+
+    add_coins_patch.assert_not_awaited()
+
+
+async def test__delete_user_data__does_not_refund_free_events(
+    session: AsyncSession, add_coins_patch: AsyncMock
+) -> None:
+    webinar = _webinar("webinar-free", USER)
+    webinar.price = 0
+    await db.add(webinar)
+    await db.add(WebinarParticipant(webinar_id="webinar-free", user_id=OTHER))
+    slot = _slot("slot-free-booked", USER, OTHER)
+    slot.student_coins = 0
+    await db.add(slot)
+
+    await delete_user_data(USER)
+
+    add_coins_patch.assert_not_awaited()
