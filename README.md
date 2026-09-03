@@ -58,6 +58,33 @@ poe env             # show settings from .env file
 poe jwt             # generate a jwt with the given payload and ttl in seconds
 ```
 
+## Account Deletion
+When an account is deleted, the auth service calls `DELETE /_internal/users/{user_id}` on this microservice.
+The endpoint requires an internal token with the `events` audience and answers `204`, also for a user that has no data here, so it can be retried safely.
+
+Everything the user owns is deleted: the webinars they created together with the participants of those webinars, the slots and weekly slots they offer as a lecturer, their coachings, exams, emergency cancellations and lecturer ratings.
+Bookings of events that belong to somebody else are treated differently: a booked webinar loses its participant entry and a booked slot is freed instead of being deleted, so the other lecturer keeps their slot.
+The cache entries keyed on a user id are dropped as well.
+
+Because the auth service logs and swallows a failing call, a periodic sweep catches the deletions that were lost.
+It has no poe task and is installed as the `sweep-deleted-users` entry point:
+
+```bash
+poetry run sweep-deleted-users
+```
+
+It walks the distinct user ids found in every user id column in batches, asks the auth service for each one and deletes the data of every user it answers `404` for.
+The relevant settings are:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `AUTH_URL` | `""` | Base url of the auth service the sweep asks whether a user still exists. |
+| `INTERNAL_JWT_TTL` | `10` | Lifetime in seconds of the token used for those requests. |
+| `DELETED_USER_SWEEP_BATCH_SIZE` | `500` | Number of user ids loaded from the database per batch. |
+| `DELETED_USER_SWEEP_RATE_LIMIT` | `10` | Auth service requests per second. |
+
+In the NixOS module the sweep is a oneshot service with a timer, enabled through `academy.backend.events.sweepDeletedUsers.enable` (`interval`, default `daily`, and `randomizedDelay`, default `5m`).
+
 ## PyCharm configuration
 Configure the Python interpreter:
 
