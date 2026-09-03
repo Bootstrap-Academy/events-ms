@@ -55,34 +55,66 @@
         settings = mkOption {
           inherit (settingsFormat) type;
         };
+        sweepDeletedUsers = {
+          enable = mkEnableOption "periodic deletion of the data of users that no longer exist";
+          interval = mkOption {
+            type = types.str;
+            default = "daily";
+          };
+          randomizedDelay = mkOption {
+            type = types.str;
+            default = "5m";
+          };
+        };
       };
 
       config = let
         cfg = config.academy.backend.events;
+        serviceConfig = {
+          User = "academy-events";
+          Group = "academy-events";
+          DynamicUser = true;
+          EnvironmentFile = cfg.environmentFiles ++ [(settingsFormat.generate "config" cfg.settings)];
+        };
       in
         lib.mkIf cfg.enable {
-          systemd.services = {
-            academy-events = {
-              wantedBy = ["multi-user.target"];
-              serviceConfig = {
-                User = "academy-events";
-                Group = "academy-events";
-                DynamicUser = true;
-                EnvironmentFile = cfg.environmentFiles ++ [(settingsFormat.generate "config" cfg.settings)];
+          systemd.services =
+            {
+              academy-events = {
+                wantedBy = ["multi-user.target"];
+                inherit serviceConfig;
+                preStart = ''
+                  cd ${lib.fileset.toSource {
+                    root = ./.;
+                    fileset = lib.fileset.unions [
+                      ./alembic
+                      ./alembic.ini
+                    ];
+                  }}
+                  ${self.packages.${pkgs.system}.default}/bin/alembic upgrade head
+                '';
+                script = ''
+                  ${self.packages.${pkgs.system}.default}/bin/api
+                '';
               };
-              preStart = ''
-                cd ${lib.fileset.toSource {
-                  root = ./.;
-                  fileset = lib.fileset.unions [
-                    ./alembic
-                    ./alembic.ini
-                  ];
-                }}
-                ${self.packages.${pkgs.system}.default}/bin/alembic upgrade head
-              '';
-              script = ''
-                ${self.packages.${pkgs.system}.default}/bin/api
-              '';
+            }
+            // lib.optionalAttrs cfg.sweepDeletedUsers.enable {
+              academy-events-sweep-deleted-users = {
+                serviceConfig = serviceConfig // {Type = "oneshot";};
+                script = ''
+                  ${self.packages.${pkgs.system}.default}/bin/sweep-deleted-users
+                '';
+              };
+            };
+
+          systemd.timers = lib.optionalAttrs cfg.sweepDeletedUsers.enable {
+            academy-events-sweep-deleted-users = {
+              wantedBy = ["timers.target"];
+              timerConfig = {
+                OnCalendar = cfg.sweepDeletedUsers.interval;
+                RandomizedDelaySec = cfg.sweepDeletedUsers.randomizedDelay;
+                Persistent = true;
+              };
             };
           };
         };
