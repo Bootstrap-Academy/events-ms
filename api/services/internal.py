@@ -21,7 +21,12 @@ class InternalService(Enum):
     SHOP = settings.shop_url
 
     def _get_token(self) -> str:
-        return encode_jwt({"aud": self.name.lower()}, timedelta(seconds=settings.internal_jwt_ttl))
+        audience = self.name.lower()
+        return encode_jwt(
+            {"aud": audience},
+            timedelta(seconds=settings.internal_jwt_ttl),
+            secret=settings.internal_jwt_secret(audience),
+        )
 
     @classmethod
     async def _handle_error(cls, response: Response) -> None:

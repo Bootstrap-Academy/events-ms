@@ -2,7 +2,17 @@ from sqlalchemy import or_
 
 from api.database import db, filter_by, select
 from api.logger import get_logger
-from api.models import Coaching, EmergencyCancel, Exam, LecturerRating, Slot, Webinar, WebinarParticipant, WeeklySlot
+from api.models import (
+    CalendarToken,
+    Coaching,
+    EmergencyCancel,
+    Exam,
+    LecturerRating,
+    Slot,
+    Webinar,
+    WebinarParticipant,
+    WeeklySlot,
+)
 from api.utils.cache import clear_cache
 
 
@@ -31,6 +41,7 @@ async def delete_user_data(user_id: str) -> None:
             Exam.__tablename__,
             EmergencyCancel.__tablename__,
             LecturerRating.__tablename__,
+            CalendarToken.__tablename__,
         ],
         0,
     )
@@ -89,6 +100,12 @@ async def delete_user_data(user_id: str) -> None:
     ):
         counts[LecturerRating.__tablename__] += 1
         await db.delete(rating)
+
+    # the token of the ics calendar feed, which stops working as soon as it is deleted
+    calendar_token: CalendarToken
+    async for calendar_token in await db.stream(filter_by(CalendarToken, user_id=user_id)):
+        counts[CalendarToken.__tablename__] += 1
+        await db.delete(calendar_token)
 
     for prefix in USER_CACHE_PREFIXES:
         await clear_cache(prefix)

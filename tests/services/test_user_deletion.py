@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import db, select
 from api.models import (
+    CalendarToken,
     Coaching,
     EmergencyCancel,
     EventType,
@@ -111,6 +112,9 @@ async def data(session: AsyncSession) -> None:
     await db.add(_rating("rating-participant", OTHER, USER))
     await db.add(_rating("rating-other", OTHER, OTHER))
 
+    await CalendarToken.get_or_create(USER)
+    await CalendarToken.get_or_create(OTHER)
+
 
 async def _all(cls: Any) -> list[Any]:
     return await db.all(select(cls))
@@ -127,6 +131,7 @@ async def test__delete_user_data__deletes_everything(data: None) -> None:
     assert [e.user_id for e in await _all(Exam)] == []
     assert [e.user_id for e in await _all(EmergencyCancel)] == []
     assert [r.id for r in await _all(LecturerRating)] == ["rating-other"]
+    assert [t.user_id for t in await _all(CalendarToken)] == [OTHER]
 
 
 async def test__delete_user_data__frees_booked_slots(data: None) -> None:
@@ -155,6 +160,7 @@ async def test__delete_user_data__keeps_other_users(data: None) -> None:
     assert [e.user_id for e in await _all(Exam)] == [USER]
     assert [e.user_id for e in await _all(EmergencyCancel)] == [USER]
     assert [r.id for r in await _all(LecturerRating)] == ["rating-lecturer"]
+    assert [t.user_id for t in await _all(CalendarToken)] == [USER]
 
     slot = await db.get(Slot, id="slot-user-booked")
     assert slot is not None and slot.booked_by is None
@@ -171,6 +177,7 @@ async def test__delete_user_data__unknown_user(data: None) -> None:
     assert len(await _all(Exam)) == 1
     assert len(await _all(EmergencyCancel)) == 1
     assert len(await _all(LecturerRating)) == 3
+    assert len(await _all(CalendarToken)) == 2
 
 
 async def test__delete_user_data__idempotent(data: None) -> None:

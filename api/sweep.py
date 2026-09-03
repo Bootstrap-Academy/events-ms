@@ -10,7 +10,17 @@ from sqlalchemy.sql import Select
 
 from api.database import db, db_context, select
 from api.logger import get_logger
-from api.models import Coaching, EmergencyCancel, Exam, LecturerRating, Slot, Webinar, WebinarParticipant, WeeklySlot
+from api.models import (
+    CalendarToken,
+    Coaching,
+    EmergencyCancel,
+    Exam,
+    LecturerRating,
+    Slot,
+    Webinar,
+    WebinarParticipant,
+    WeeklySlot,
+)
 from api.services.auth import exists_user_uncached
 from api.services.internal import InternalServiceError
 from api.services.user_deletion import delete_user_data
@@ -31,6 +41,7 @@ USER_ID_COLUMNS: list[Any] = [
     EmergencyCancel.user_id,
     LecturerRating.lecturer_id,
     LecturerRating.participant_id,
+    CalendarToken.user_id,
 ]
 
 
