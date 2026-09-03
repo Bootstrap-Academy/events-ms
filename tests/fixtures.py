@@ -1,3 +1,4 @@
+from contextvars import ContextVar
 from typing import AsyncIterator
 from unittest.mock import AsyncMock
 
@@ -5,7 +6,7 @@ import pytest
 from _pytest.monkeypatch import MonkeyPatch
 from httpx import AsyncClient
 from pytest_mock import MockerFixture
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from api.app import app
 from api.database import db
@@ -15,6 +16,15 @@ from api.database import db
 async def database(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(db, "engine", create_async_engine("sqlite+aiosqlite:///:memory:"))
     await db.create_tables()
+
+
+@pytest.fixture
+async def session(database: None, monkeypatch: MonkeyPatch) -> AsyncIterator[AsyncSession]:
+    # set the session as the default value of the context variable so that it is also visible in other tasks
+    db_session = AsyncSession(db.engine)
+    monkeypatch.setattr(db, "_session", ContextVar("session", default=db_session))
+    yield db_session
+    await db_session.close()
 
 
 @pytest.fixture
