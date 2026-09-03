@@ -62,7 +62,7 @@ poe jwt             # generate a jwt with the given payload and ttl in seconds
 When an account is deleted, the auth service calls `DELETE /_internal/users/{user_id}` on this microservice.
 The endpoint requires an internal token with the `events` audience and answers `204`, also for a user that has no data here, so it can be retried safely.
 
-Everything the user owns is deleted: the webinars they created together with the participants of those webinars, the slots and weekly slots they offer as a lecturer, their coachings, exams, emergency cancellations and lecturer ratings.
+Everything the user owns is deleted: the webinars they created together with the participants of those webinars, the slots and weekly slots they offer as a lecturer, their coachings, exams, emergency cancellations, lecturer ratings and the token of their ics calendar feed.
 Bookings of events that belong to somebody else are treated differently: a booked webinar loses its participant entry and a booked slot is freed instead of being deleted, so the other lecturer keeps their slot.
 The cache entries keyed on a user id are dropped as well.
 
@@ -84,6 +84,28 @@ The relevant settings are:
 | `DELETED_USER_SWEEP_RATE_LIMIT` | `10` | Auth service requests per second. |
 
 In the NixOS module the sweep is a oneshot service with a timer, enabled through `academy.backend.events.sweepDeletedUsers.enable` (`interval`, default `daily`, and `randomizedDelay`, default `5m`).
+
+## Calendar Subscriptions
+`GET /calendar` returns an `ics_token`, which the frontend turns into the subscription url `…/events/calendar/{token}/academy.ics`.
+That url is a bearer credential: whoever knows it can read the events of that user without logging in.
+
+The token is a random value stored per user in `events_calendar_tokens` and created the first time the calendar is loaded.
+`POST /calendar/token/rotate` replaces it, which invalidates every calendar client that still uses the old url.
+It is deleted with the rest of the user's data on account deletion, so a deleted account's feed stops working immediately.
+
+## Internal Service Tokens
+Tokens for the `/_internal/…` endpoints are signed per audience.
+An outgoing token is signed with the secret of the service it is sent to, and an incoming one is verified with the secret of the `events` audience:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `INTERNAL_JWT_SECRET_AUTH` | `""` | Tokens this service sends to the auth service. |
+| `INTERNAL_JWT_SECRET_SHOP` | `""` | Tokens this service sends to the shop service. |
+| `INTERNAL_JWT_SECRET_SKILLS` | `""` | Tokens this service sends to the skills service. |
+| `INTERNAL_JWT_SECRET_EVENTS` | `""` | Tokens this service accepts on `/_internal/…`. |
+
+An empty value falls back to `JWT_SECRET`, so the services keep working until a dedicated secret is deployed to every sender and to the receiver of an audience.
+`JWT_SECRET` itself stays in use for the user access tokens the auth service issues.
 
 ## PyCharm configuration
 Configure the Python interpreter:
