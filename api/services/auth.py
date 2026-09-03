@@ -5,11 +5,25 @@ from api.services.internal import InternalService
 from api.utils.cache import redis_cached
 
 
-@redis_cached("user", "user_id")
-async def exists_user(user_id: str) -> bool:
+async def exists_user_uncached(user_id: str) -> bool | None:
+    """
+    Check whether a user exists without using the cache.
+
+    Returns `None` if the auth service responded with an unexpected status code.
+    """
+
     async with InternalService.AUTH.client as client:
         response = await client.get(f"/users/{user_id}")
-        return response.status_code == 200
+        if response.status_code == 200:
+            return True
+        if response.status_code == 404:
+            return False
+        return None
+
+
+@redis_cached("user", "user_id")
+async def exists_user(user_id: str) -> bool:
+    return await exists_user_uncached(user_id) is True
 
 
 @redis_cached("user", "user_id")
