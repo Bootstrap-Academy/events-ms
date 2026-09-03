@@ -1,6 +1,7 @@
 import asyncio
 import random
 import string
+from base64 import b64encode
 from dataclasses import dataclass
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -19,7 +20,14 @@ from ..settings import settings
 logger = get_logger(__name__)
 
 
-env = Environment(loader=FileSystemLoader(Path(__file__).parent / "../../templates"), autoescape=True)
+TEMPLATES = Path(__file__).parent / "../../templates"
+
+env = Environment(loader=FileSystemLoader(TEMPLATES), autoescape=True)
+
+# The logo is embedded into the mail instead of being loaded from a static
+# host: rendering a message must not cause any request and therefore must not
+# be able to disclose the recipient's IP address.
+env.globals["logo_base64"] = b64encode((TEMPLATES / "logo-text.png").read_bytes()).decode()
 
 
 @dataclass
