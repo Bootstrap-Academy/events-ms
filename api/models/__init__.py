@@ -1,3 +1,4 @@
+from .calendar_tokens import CalendarToken
 from .coachings import Coaching
 from .emergency_cancel import EmergencyCancel
 from .exams import Exam
@@ -9,6 +10,7 @@ from .weekly_slots import WeeklySlot
 
 
 __all__ = [
+    "CalendarToken",
     "Coaching",
     "EmergencyCancel",
     "EventType",
