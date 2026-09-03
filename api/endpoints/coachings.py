@@ -91,7 +91,7 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
         instructor_rating=await models.LecturerRating.get_rating(slot.user_id, slot.skill_id),
         booked=True,
         bookable=False,
-        student=await get_userinfo(slot.booked_by),
+        student=await get_userinfo(cast(str, slot.booked_by)),
     )
 
 

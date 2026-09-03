@@ -146,7 +146,7 @@ async def get_coachings(
                     booked=True,
                     bookable=False,
                     student=(
-                        await get_userinfo(slot.booked_by)
+                        await get_userinfo(cast(str, slot.booked_by))
                         if admin or user_id in (slot.user_id, slot.booked_by)
                         else None
                     ),
