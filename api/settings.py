@@ -46,6 +46,9 @@ class Settings(BaseSettings):
 
     internal_jwt_ttl: int = 10
 
+    deleted_user_sweep_batch_size: int = 500
+    deleted_user_sweep_rate_limit: float = 10  # auth service requests per second
+
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
