@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any, cast
 
 from api.schemas.user import UserInfo
 from api.services.internal import InternalService
@@ -41,10 +41,16 @@ async def get_user_id_by_email(email: str) -> str | None:
 
 
 @redis_cached("user", "user_id")
-async def get_userinfo(user_id: str) -> UserInfo | None:
+async def _fetch_userinfo(user_id: str) -> dict[str, Any] | None:
     async with InternalService.AUTH.client as client:
         response = await client.get(f"/users/{user_id}")
         if response.status_code != 200:
             return None
 
-        return UserInfo(**response.json())
+        # only the fields UserInfo declares are cached, so no email address is written to redis here
+        return UserInfo(**response.json()).dict()
+
+
+async def get_userinfo(user_id: str) -> UserInfo | None:
+    data = await _fetch_userinfo(user_id)
+    return UserInfo(**data) if data is not None else None
