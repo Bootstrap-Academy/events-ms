@@ -36,7 +36,6 @@ class UserInfo(BaseModel):
     id: str = Field(description="Unique identifier for the user")
     name: str = Field(description="Unique username")
     display_name: str = Field(description="Full name of the user")
-    email: str | None = Field(description="Email address")
     avatar_url: str | None = Field(description="URL of the user's avatar")
 
     class Config:
