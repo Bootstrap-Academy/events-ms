@@ -8,7 +8,12 @@ from pydantic import ValidationError
 from .exceptions.auth import EmailNotVerifiedError, InvalidTokenError, PermissionDeniedError, UserNotFoundError
 from .schemas.user import User, UserAccessToken
 from .services.auth import exists_user
+from .settings import settings
 from .utils.jwt import decode_jwt
+
+
+# the audience internal tokens have to be issued for to be accepted by this service
+INTERNAL_AUDIENCE = "events"
 
 
 def get_token(request: Request) -> str:
@@ -26,24 +31,33 @@ class HTTPAuth(SecurityBase):
 
 
 class JWTAuth(HTTPAuth):
-    def __init__(self, *, audience: list[str] | None = None, force_valid: bool = True):
+    def __init__(self, *, audience: list[str] | None = None, force_valid: bool = True, secret: str | None = None):
         super().__init__()
         self.audience: list[str] | None = audience
         self.force_valid: bool = force_valid
+        self.secret: str | None = secret
 
     async def __call__(self, request: Request) -> dict[Any, Any] | None:
-        if (data := decode_jwt(get_token(request), audience=self.audience)) is None and self.force_valid:
+        data = decode_jwt(get_token(request), audience=self.audience, secret=self.secret)
+        if data is None and self.force_valid:
             raise InvalidTokenError
         return data
 
 
 class InternalAuth(JWTAuth):
-    def __init__(self, audience: list[str] | None = None):
-        super().__init__(audience=audience, force_valid=True)
+    """
+    Authentication for the internal endpoints of this service.
+
+    Internal tokens are signed with the secret that belongs to the audience they are issued for, so that the key of one
+    service cannot be used to talk to another one.
+    """
+
+    def __init__(self, audience: str):
+        super().__init__(audience=[audience], force_valid=True, secret=settings.internal_jwt_secret(audience))
 
 
 jwt_auth = Depends(JWTAuth(force_valid=False))
-internal_auth = Depends(InternalAuth(audience=["events"]))
+internal_auth = Depends(InternalAuth(INTERNAL_AUDIENCE))
 
 
 @Depends

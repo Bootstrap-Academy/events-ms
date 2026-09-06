@@ -61,3 +61,26 @@ async def test__jwt_decode(
         assert exp == datetime.utcfromtimestamp(exp_)
     else:
         assert result is None
+
+
+async def test__jwt_encode__explicit_secret(mocker: MockerFixture, monkeypatch: MonkeyPatch) -> None:
+    mocker.patch("api.utils.jwt.utcnow", lambda: datetime.utcfromtimestamp(42))
+    monkeypatch.setattr(settings, "jwt_secret", "the shared secret")
+
+    token = jwt.encode_jwt({"aud": "events"}, timedelta(seconds=10), secret="the events secret")
+
+    assert _jwt.decode(token, "the events secret", ["HS256"], {"verify_exp": False, "verify_aud": False}) == {
+        "aud": "events",
+        "exp": 52,
+    }
+    with pytest.raises(_jwt.InvalidSignatureError):
+        _jwt.decode(token, "the shared secret", ["HS256"], {"verify_exp": False, "verify_aud": False})
+
+
+async def test__jwt_decode__explicit_secret(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "jwt_secret", "the shared secret")
+    exp = (datetime.utcnow() + timedelta(seconds=10)).replace(microsecond=0)
+    token = _jwt.encode({"aud": "events", "exp": exp}, "the events secret", "HS256")
+
+    assert jwt.decode_jwt(token, audience=["events"], secret="the events secret") is not None
+    assert jwt.decode_jwt(token, audience=["events"]) is None
