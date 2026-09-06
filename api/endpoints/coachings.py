@@ -121,7 +121,7 @@ async def set_coaching(data: UpdateCoaching, skill_id: str, user: User = user_au
     *Requirements:* **VERIFIED**
     """
 
-    if not user.admin and not (await get_skill_levels(user.id)).get(skill_id, 0) < settings.coaching_level:
+    if not user.admin and (await get_skill_levels(user.id)).get(skill_id, 0) < settings.coaching_level:
         raise SkillRequirementsNotMetError
 
     coaching = await db.get(models.Coaching, user_id=user.id, skill_id=skill_id)

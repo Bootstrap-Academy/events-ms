@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block heading %}Stornierung{% endblock %}
+
+{% block content %}
+				<p>
+					{% if whole_event %}
+					Dein Webinar "{{ title }}" am
+					<a href="{{ datetime_link }}">{{ date }} um {{ time }} (UTC)</a> wurde abgesagt. Alle
+					Anmeldungen wurden storniert und die MorphCoins zurückerstattet.
+					{% else %}
+					Eine Anmeldung für dein Webinar "{{ title }}" am
+					<a href="{{ datetime_link }}">{{ date }} um {{ time }} (UTC)</a> wurde storniert.
+					{% endif %}
+					{% if coins %}<br />
+					Dir wurden {{ coins }} MorphCoins als Ausgleich gutgeschrieben.
+					{% endif %}
+				</p>
+{% endblock %}
+
+{% block closing %}
+				<p>
+					Dein Bootstrap-Academy-Team
+				</p>
+{% endblock %}
