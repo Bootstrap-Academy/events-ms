@@ -85,6 +85,25 @@ The relevant settings are:
 
 In the NixOS module the sweep is a oneshot service with a timer, enabled through `academy.backend.events.sweepDeletedUsers.enable` (`interval`, default `daily`, and `randomizedDelay`, default `5m`).
 
+## Event Cancellations
+`DELETE /calendar/{event_id}` cancels a webinar or a coaching. Who is allowed to cancel and what happens to the MorphCoins depends on the role of the caller.
+
+A participant who cancels their own booking is refunded depending on how far away the event is:
+
+| Time until the event | Refund | Lecturer |
+| --- | --- | --- |
+| at least 7 days | full price | nothing |
+| at least 24 hours | half the price | half of their share |
+| less than 24 hours | not possible, the request is answered `403` | – |
+
+A lecturer or an admin who cancels the event itself refunds the full price to every participant, because the event does not take place at all.
+A lecturer who does so while somebody has booked owes an emergency cancellation, which makes their next event free for the participants; an admin cancelling on their behalf does not trigger that.
+Cancelling a coaching frees the slot, so the lecturer can be booked again for that time.
+
+Everybody whose booking changed is notified by e-mail (in German, with the logo embedded as described above): the participants of a cancelled webinar, the participant who cancelled a single registration, the student of a cancelled coaching and, in every case, the lecturer.
+The mails name the event, its date and the refunded amount.
+They are sent after the booking has been changed and are logged instead of raised if they fail, so a cancellation never fails because of a mail.
+
 ## Calendar Subscriptions
 `GET /calendar` returns an `ics_token`, which the frontend turns into the subscription url `…/events/calendar/{token}/academy.ics`.
 That url is a bearer credential: whoever knows it can read the events of that user without logging in.
