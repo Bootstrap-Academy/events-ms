@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block heading %}Stornierung{% endblock %}
+
+{% block content %}
+				<p>
+					{% if by_lecturer %}
+					Dein Coaching{% if instructor %} mit {{ instructor }}{% endif %} am
+					<a href="{{ datetime_link }}">{{ date }} um {{ time }} (UTC)</a> wurde abgesagt.
+					{% else %}
+					Deine Buchung des Coachings{% if instructor %} mit {{ instructor }}{% endif %} am
+					<a href="{{ datetime_link }}">{{ date }} um {{ time }} (UTC)</a> wurde storniert.
+					{% endif %}
+					{% if coins %}<br />
+					Wir haben dir {{ coins }} MorphCoins zurückerstattet.
+					{% endif %}
+				</p>
+{% endblock %}
+
+{% block closing %}
+				<p>
+					Wir hoffen, dich bald bei einem anderen Termin zu sehen!<br />
+					Dein Bootstrap-Academy-Team
+				</p>
+{% endblock %}

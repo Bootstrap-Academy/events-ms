@@ -43,6 +43,17 @@ class Message:
 BOOKED_WEBINAR = Message(title="Anmeldungsbestätigung - Bootstrap Academy", template="booked_webinar.html")
 BOOKED_COACHING = Message(title="Anmeldungsbestätigung - Bootstrap Academy", template="booked_coaching.html")
 
+# Cancellation notices. The participant of an event and its lecturer are told about different things, so each of them
+# has its own template.
+CANCELLED_WEBINAR = Message(title="Stornierung deiner Buchung - Bootstrap Academy", template="cancelled_webinar.html")
+CANCELLED_WEBINAR_LECTURER = Message(
+    title="Stornierung eines Termins - Bootstrap Academy", template="cancelled_webinar_lecturer.html"
+)
+CANCELLED_COACHING = Message(title="Stornierung deiner Buchung - Bootstrap Academy", template="cancelled_coaching.html")
+CANCELLED_COACHING_LECTURER = Message(
+    title="Stornierung eines Termins - Bootstrap Academy", template="cancelled_coaching_lecturer.html"
+)
+
 
 @run_in_thread
 def check_email_deliverability(email: str) -> bool:
