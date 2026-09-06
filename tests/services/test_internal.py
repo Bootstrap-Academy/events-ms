@@ -12,12 +12,30 @@ from api.settings import settings
 async def test__internal_service__get_token(mocker: MockerFixture, monkeypatch: MonkeyPatch) -> None:
     encode_jwt = mocker.patch("api.services.internal.encode_jwt")
     monkeypatch.setattr(settings, "internal_jwt_ttl", 123)
+    monkeypatch.setattr(settings, "jwt_secret", "the shared secret")
+    monkeypatch.setattr(settings, "internal_jwt_secret_auth", "the auth secret")
     service = MagicMock()
-    service.name = "MY_SERVICE"
+    service.name = "AUTH"
 
     result = InternalService._get_token(service)
 
-    encode_jwt.assert_called_once_with({"aud": "my_service"}, timedelta(seconds=123))
+    encode_jwt.assert_called_once_with({"aud": "auth"}, timedelta(seconds=123), secret="the auth secret")
+    assert result == encode_jwt()
+
+
+async def test__internal_service__get_token__falls_back_to_the_shared_secret(
+    mocker: MockerFixture, monkeypatch: MonkeyPatch
+) -> None:
+    encode_jwt = mocker.patch("api.services.internal.encode_jwt")
+    monkeypatch.setattr(settings, "internal_jwt_ttl", 123)
+    monkeypatch.setattr(settings, "jwt_secret", "the shared secret")
+    monkeypatch.setattr(settings, "internal_jwt_secret_auth", "")
+    service = MagicMock()
+    service.name = "AUTH"
+
+    result = InternalService._get_token(service)
+
+    encode_jwt.assert_called_once_with({"aud": "auth"}, timedelta(seconds=123), secret="the shared secret")
     assert result == encode_jwt()
 
 

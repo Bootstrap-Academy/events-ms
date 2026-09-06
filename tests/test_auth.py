@@ -1,12 +1,14 @@
 from unittest.mock import MagicMock
 
 import pytest
+from _pytest.monkeypatch import MonkeyPatch
 from fastapi.openapi.models import SecuritySchemeType
 from fastapi.security.base import SecurityBase
 from pytest_mock import MockerFixture
 
 from api import auth
 from api.exceptions.auth import InvalidTokenError
+from api.settings import settings
 
 
 @pytest.mark.parametrize("auth_header,token", [("test", "test"), (None, ""), ("Bearer asDF1234", "asDF1234")])
@@ -70,3 +72,15 @@ async def test__jwtauth_call__valid_token(mocker: MockerFixture) -> None:
     assert await auth.JWTAuth.__call__(http_auth, request) == {"foo": "bar"}
 
     get_token.assert_called_once_with(request)
+
+
+def test__internal_auth__uses_the_secret_of_its_own_audience(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "jwt_secret", "shared")
+    monkeypatch.setattr(settings, "internal_jwt_secret_events", "events secret")
+
+    internal_auth = auth.InternalAuth(auth.INTERNAL_AUDIENCE)
+
+    assert auth.INTERNAL_AUDIENCE == "events"
+    assert internal_auth.audience == ["events"]
+    assert internal_auth.force_valid is True
+    assert internal_auth.secret == "events secret"

@@ -39,6 +39,9 @@ class Coaching(Event):
     student: UserInfo | None = Field(description="The student (booked coachings only)")
 
 
-class Calendar(BaseModel):
+class CalendarToken(BaseModel):
     ics_token: str = Field(description="The token to access the calendar via the ics endpoint")
+
+
+class Calendar(CalendarToken):
     events: list[Webinar | Coaching] = Field(description="List of events")
