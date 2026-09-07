@@ -96,10 +96,10 @@ async def data(session: AsyncSession) -> None:
     await db.add(_webinar("webinar-user", USER))
     await db.add(_webinar("webinar-other", OTHER))
     await db.add(_webinar("webinar-third", THIRD))
-    await db.add(WebinarParticipant(webinar_id="webinar-user", user_id=OTHER))
-    await db.add(WebinarParticipant(webinar_id="webinar-other", user_id=USER))
-    await db.add(WebinarParticipant(webinar_id="webinar-third", user_id=USER))
-    await db.add(WebinarParticipant(webinar_id="webinar-third", user_id=OTHER))
+    await db.add(WebinarParticipant(webinar_id="webinar-user", user_id=OTHER, paid_coins=1337))
+    await db.add(WebinarParticipant(webinar_id="webinar-other", user_id=USER, paid_coins=1337))
+    await db.add(WebinarParticipant(webinar_id="webinar-third", user_id=USER, paid_coins=1337))
+    await db.add(WebinarParticipant(webinar_id="webinar-third", user_id=OTHER, paid_coins=1337))
 
     # slots the users offer as lecturers, one of them booked by the respective other user
     await db.add(_weekly_slot("weekly-user", USER))
@@ -129,7 +129,7 @@ async def past_data(session: AsyncSession) -> None:
     webinar.start = utcnow() - timedelta(hours=2)
     webinar.end = utcnow() - timedelta(hours=1)
     await db.add(webinar)
-    await db.add(WebinarParticipant(webinar_id="webinar-past", user_id=OTHER))
+    await db.add(WebinarParticipant(webinar_id="webinar-past", user_id=OTHER, paid_coins=1337))
 
     slot = _slot("slot-past-booked", USER, OTHER)
     slot.start = utcnow() - timedelta(hours=2)
@@ -234,6 +234,20 @@ async def test__delete_user_data__does_not_refund_the_deleted_user(data: None, a
     assert all(c.args[0] != USER for c in add_coins_patch.await_args_list)
 
 
+async def test__delete_user_data__refunds_what_each_participant_paid(
+    session: AsyncSession, add_coins_patch: AsyncMock
+) -> None:
+    """A registration that was free is not refunded, even though the webinar itself has a price."""
+
+    await db.add(_webinar("webinar-user", USER))
+    await db.add(WebinarParticipant(webinar_id="webinar-user", user_id=OTHER, paid_coins=0))
+    await db.add(WebinarParticipant(webinar_id="webinar-user", user_id=THIRD, paid_coins=42))
+
+    await delete_user_data(USER)
+
+    assert add_coins_patch.await_args_list == [call(THIRD, 42, "Cancel webinar 'test webinar'", False)]
+
+
 async def test__delete_user_data__does_not_refund_past_events(past_data: None, add_coins_patch: AsyncMock) -> None:
     await delete_user_data(USER)
 
@@ -246,7 +260,7 @@ async def test__delete_user_data__does_not_refund_free_events(
     webinar = _webinar("webinar-free", USER)
     webinar.price = 0
     await db.add(webinar)
-    await db.add(WebinarParticipant(webinar_id="webinar-free", user_id=OTHER))
+    await db.add(WebinarParticipant(webinar_id="webinar-free", user_id=OTHER, paid_coins=0))
     slot = _slot("slot-free-booked", USER, OTHER)
     slot.student_coins = 0
     await db.add(slot)

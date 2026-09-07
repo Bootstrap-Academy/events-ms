@@ -73,8 +73,8 @@ def _rating(rating_id: str, lecturer_id: str, participant_id: str | None) -> Lec
 async def data(session: AsyncSession) -> None:
     await db.add(_webinar("webinar-user", USER))
     await db.add(_webinar("webinar-other", OTHER))
-    await db.add(WebinarParticipant(webinar_id="webinar-user", user_id=OTHER))
-    await db.add(WebinarParticipant(webinar_id="webinar-other", user_id=USER))
+    await db.add(WebinarParticipant(webinar_id="webinar-user", user_id=OTHER, paid_coins=42))
+    await db.add(WebinarParticipant(webinar_id="webinar-other", user_id=USER, paid_coins=1337))
 
     await db.add(WeeklySlot(id="weekly-user", user_id=USER, weekday=3, start=time(10), end=time(11), last_slot=START))
     await db.add(WeeklySlot(id="weekly-other", user_id=OTHER, weekday=4, start=time(12), end=time(13), last_slot=START))
@@ -98,6 +98,7 @@ async def test__export_user_data(data: None) -> None:
     assert export.webinars[0].participants == 1
     assert [p.webinar_id for p in export.webinar_participations] == ["webinar-other"]
     assert export.webinar_participations[0].name == "webinar webinar-other"
+    assert export.webinar_participations[0].paid_coins == 1337
     assert [slot.id for slot in export.slots_offered] == ["slot-user"]
     assert [slot.id for slot in export.slots_booked] == ["slot-other-booked"]
     assert export.slots_booked[0].event_type == "coaching"

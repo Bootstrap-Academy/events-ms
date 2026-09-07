@@ -16,11 +16,11 @@ from api.schemas import calendar
 from api.schemas.coachings import Coaching, UpdateCoaching
 from api.schemas.user import User
 from api.services import shop
-from api.services.auth import get_email, get_userinfo
+from api.services.auth import get_userinfo
 from api.services.skills import get_skill_levels
 from api.settings import settings
 from api.utils.cache import clear_cache
-from api.utils.email import BOOKED_COACHING
+from api.utils.email import BOOKED_COACHING, notify
 from api.utils.utc import datetime_link, utcnow
 
 
@@ -56,25 +56,30 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
     if not instructor:
         raise CoachingNotFoundError
 
-    if not await models.EmergencyCancel.delete(slot.user_id) and not await shop.spend_coins(
-        user.id, coaching.price, "Coaching"
-    ):
-        raise NotEnoughCoinsError
+    # a lecturer who had to cancel an event owes their next booking, so this one is free and the debt is settled
+    if await models.EmergencyCancel.delete(slot.user_id):
+        paid_coins = 0
+    else:
+        paid_coins = coaching.price
+        if not await shop.spend_coins(user.id, paid_coins, "Coaching"):
+            raise NotEnoughCoinsError
 
-    slot.book(user.id, EventType.COACHING, coaching.price, int(coaching.price * (1 - settings.event_fee)), skill_id)
+    # what the student was charged, not the price of the coaching: the refund and the lecturer's share are computed
+    # from these two amounts, so a booking that cost nothing must not be able to pay anything out
+    slot.book(user.id, EventType.COACHING, paid_coins, int(paid_coins * (1 - settings.event_fee)), skill_id)
 
     await clear_cache("calendar")
 
-    if email := await get_email(user.id):
-        await BOOKED_COACHING.send(
-            email,
-            instructor=instructor.display_name,
-            date=slot.start.strftime("%d.%m.%Y"),
-            time=slot.start.strftime("%H:%M"),
-            datetime_link=datetime_link(slot.start),
-            link=slot.link,
-            coins=coaching.price,
-        )
+    await notify(
+        BOOKED_COACHING,
+        user.id,
+        instructor=instructor.display_name,
+        date=slot.start.strftime("%d.%m.%Y"),
+        time=slot.start.strftime("%H:%M"),
+        datetime_link=datetime_link(slot.start),
+        link=slot.link,
+        coins=paid_coins,
+    )
 
     return calendar.Coaching(
         id=slot.id,

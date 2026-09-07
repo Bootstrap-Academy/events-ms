@@ -14,6 +14,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from .async_thread import run_in_thread
 from ..logger import get_logger
+from ..services.auth import get_email
 from ..settings import settings
 
 
@@ -38,6 +39,23 @@ class Message:
     async def send(self, recipient: str, *, reply_to: str | None = None, **kwargs: Any) -> None:
         content = env.get_template(self.template).render(**kwargs)
         await send_email(recipient, self.title, content, reply_to=reply_to)
+
+
+async def notify(message: Message, user_id: str, **kwargs: Any) -> None:
+    """
+    Send a message to a user, if the auth service knows an address for them.
+
+    Everything a message of this service reports has already happened when it is built: the coins have moved and a
+    booking has been created or cancelled. A mail that cannot be rendered or handed to the mail server is therefore
+    logged instead of failing the request, which would otherwise tell the caller that a booking they were charged
+    for did not happen.
+    """
+
+    try:
+        if email := await get_email(user_id):
+            await message.send(email, **kwargs)
+    except Exception:
+        logger.exception("could not send %s to user %s", message.template, user_id)
 
 
 BOOKED_WEBINAR = Message(title="Anmeldungsbestätigung - Bootstrap Academy", template="booked_webinar.html")
