@@ -88,16 +88,19 @@ In the NixOS module the sweep is a oneshot service with a timer, enabled through
 ## Event Cancellations
 `DELETE /calendar/{event_id}` cancels a webinar or a coaching. Who is allowed to cancel and what happens to the MorphCoins depends on the role of the caller.
 
+Every refund is computed from the amount the participant was actually charged for their booking, which is stored on the booking (`events_webinar_participants.paid_coins` for a webinar, `events_slot.student_coins` for a coaching) and is not necessarily the current price of the event.
+A booking that was free therefore refunds nothing and pays the lecturer nothing, and a later price change does not change what is refunded.
+
 A participant who cancels their own booking is refunded depending on how far away the event is:
 
 | Time until the event | Refund | Lecturer |
 | --- | --- | --- |
-| at least 7 days | full price | nothing |
-| at least 24 hours | half the price | half of their share |
+| at least 7 days | the amount paid | nothing |
+| at least 24 hours | half the amount paid | half of their share of it |
 | less than 24 hours | not possible, the request is answered `403` | – |
 
-A lecturer or an admin who cancels the event itself refunds the full price to every participant, because the event does not take place at all.
-A lecturer who does so while somebody has booked owes an emergency cancellation, which makes their next event free for the participants; an admin cancelling on their behalf does not trigger that.
+A lecturer or an admin who cancels the event itself refunds every participant the amount they paid, because the event does not take place at all.
+A lecturer who does so while somebody has booked owes an emergency cancellation, which makes the next booking of one of their events free; that booking consumes the emergency cancellation, so it settles exactly one booking.
 Cancelling a coaching frees the slot, so the lecturer can be booked again for that time.
 
 Everybody whose booking changed is notified by e-mail (in German, with the logo embedded as described above): the participants of a cancelled webinar, the participant who cancelled a single registration, the student of a cancelled coaching and, in every case, the lecturer.
