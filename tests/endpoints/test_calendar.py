@@ -80,6 +80,10 @@ def _webinar(start: timedelta, price: int = PRICE) -> Webinar:
     )
 
 
+def _participant(user_id: str, paid_coins: int = PRICE) -> WebinarParticipant:
+    return WebinarParticipant(webinar_id="webinar", user_id=user_id, paid_coins=paid_coins)
+
+
 def _slot(start: timedelta, booked_by: str | None = STUDENT) -> Slot:
     return Slot(
         id="slot",
@@ -120,7 +124,7 @@ def send_email(mocker: MockerFixture) -> AsyncMock:
 
 @pytest.fixture(autouse=True)
 def userinfo(mocker: MockerFixture) -> AsyncMock:
-    mocker.patch("api.endpoints.calendar.get_email", AsyncMock(side_effect=lambda user_id: f"{user_id}@example.com"))
+    mocker.patch("api.utils.email.get_email", AsyncMock(side_effect=lambda user_id: f"{user_id}@example.com"))
     return mocker.patch(
         "api.endpoints.calendar.get_userinfo",
         AsyncMock(return_value=UserInfo(id=LECTURER, name="lecturer", display_name="Lecturer Person", avatar_url=None)),
@@ -165,8 +169,8 @@ async def test__cancel_event__webinar_cancelled__refunds_every_participant_exact
     session: AsyncSession, add_coins: AsyncMock, spend_coins: AsyncMock, actor: str
 ) -> None:
     await db.add(_webinar(timedelta(days=2)))
-    await db.add(WebinarParticipant(webinar_id="webinar", user_id=STUDENT))
-    await db.add(WebinarParticipant(webinar_id="webinar", user_id=OTHER))
+    await db.add(_participant(STUDENT))
+    await db.add(_participant(OTHER))
 
     assert await cancel_event("webinar", _user(actor, admin=actor == ADMIN)) is True
 
@@ -186,7 +190,7 @@ async def test__cancel_event__free_webinar_cancelled__no_refund(
     session: AsyncSession, add_coins: AsyncMock, spend_coins: AsyncMock
 ) -> None:
     await db.add(_webinar(timedelta(days=2), price=0))
-    await db.add(WebinarParticipant(webinar_id="webinar", user_id=STUDENT))
+    await db.add(_participant(STUDENT, 0))
 
     assert await cancel_event("webinar", _user(LECTURER)) is True
 
@@ -194,12 +198,46 @@ async def test__cancel_event__free_webinar_cancelled__no_refund(
     spend_coins.assert_not_awaited()
 
 
+async def test__cancel_event__webinar_cancelled__refunds_what_each_participant_paid(
+    session: AsyncSession, add_coins: AsyncMock
+) -> None:
+    """A registration that was free must not be refunded, and a changed price must not change a refund."""
+
+    await db.add(_webinar(timedelta(days=2)))
+    await db.add(_participant(STUDENT, PRICE // 4))
+    await db.add(_participant(OTHER, 0))
+
+    assert await cancel_event("webinar", _user(LECTURER)) is True
+
+    assert add_coins.await_args_list == [call(STUDENT, PRICE // 4, "Cancel webinar 'test webinar'", False)]
+
+
+async def test__cancel_event__free_registrations_cancelled__refunds_nothing(
+    session: AsyncSession, add_coins: AsyncMock
+) -> None:
+    """
+    The loop of the emergency cancellation.
+
+    A lecturer who cancels a webinar with participants owes the next booking, which is then free. Cancelling that
+    webinar as well used to credit its price to a participant who had paid nothing for it, so lecturer and
+    participant could create coins by repeating the two steps.
+    """
+
+    await db.add(_webinar(timedelta(days=2)))
+    await db.add(_participant(STUDENT, 0))
+
+    assert await cancel_event("webinar", _user(LECTURER)) is True
+
+    add_coins.assert_not_awaited()
+    assert await EmergencyCancel.exists(LECTURER) is True
+
+
 async def test__cancel_event__webinar_cancelled__mails_the_participants_and_the_lecturer(
     session: AsyncSession, send_email: AsyncMock
 ) -> None:
     await db.add(_webinar(timedelta(days=2)))
-    await db.add(WebinarParticipant(webinar_id="webinar", user_id=STUDENT))
-    await db.add(WebinarParticipant(webinar_id="webinar", user_id=OTHER))
+    await db.add(_participant(STUDENT))
+    await db.add(_participant(OTHER))
 
     await cancel_event("webinar", _user(LECTURER))
 
@@ -220,7 +258,7 @@ async def test__cancel_event__webinar_cancelled__mails_the_participants_and_the_
 
 async def test__cancel_event__webinar_with_participants_cancelled__owes_the_next_event(session: AsyncSession) -> None:
     await db.add(_webinar(timedelta(days=2)))
-    await db.add(WebinarParticipant(webinar_id="webinar", user_id=STUDENT))
+    await db.add(_participant(STUDENT))
 
     await cancel_event("webinar", _user(LECTURER))
 
@@ -239,7 +277,7 @@ async def test__cancel_event__registration_cancelled_a_week_ahead__full_refund(
     session: AsyncSession, add_coins: AsyncMock
 ) -> None:
     await db.add(_webinar(timedelta(days=8)))
-    await db.add(WebinarParticipant(webinar_id="webinar", user_id=STUDENT))
+    await db.add(_participant(STUDENT))
 
     assert await cancel_event("webinar", _user(STUDENT)) is True
 
@@ -252,7 +290,7 @@ async def test__cancel_event__registration_cancelled_a_day_ahead__half_refund(
     session: AsyncSession, add_coins: AsyncMock
 ) -> None:
     await db.add(_webinar(timedelta(days=2)))
-    await db.add(WebinarParticipant(webinar_id="webinar", user_id=STUDENT))
+    await db.add(_participant(STUDENT))
 
     assert await cancel_event("webinar", _user(STUDENT)) is True
 
@@ -262,11 +300,51 @@ async def test__cancel_event__registration_cancelled_a_day_ahead__half_refund(
     ]
 
 
+async def test__cancel_event__registration_cancelled_a_week_ahead__refunds_what_was_paid(
+    session: AsyncSession, add_coins: AsyncMock
+) -> None:
+    await db.add(_webinar(timedelta(days=8)))
+    await db.add(_participant(STUDENT, PRICE // 4))
+
+    assert await cancel_event("webinar", _user(STUDENT)) is True
+
+    assert add_coins.await_args_list == [call(STUDENT, PRICE // 4, "Cancel webinar 'test webinar'", False)]
+
+
+async def test__cancel_event__registration_cancelled_a_day_ahead__halves_what_was_paid(
+    session: AsyncSession, add_coins: AsyncMock
+) -> None:
+    """The tiers apply to the amount that was paid, so the lecturer's share is half of half of that amount."""
+
+    paid = PRICE // 4
+    await db.add(_webinar(timedelta(days=2)))
+    await db.add(_participant(STUDENT, paid))
+
+    assert await cancel_event("webinar", _user(STUDENT)) is True
+
+    assert add_coins.await_args_list == [
+        call(STUDENT, paid // 2, "Cancel webinar 'test webinar'", False),
+        call(LECTURER, int(paid * (1 - settings.event_fee) // 2), "Cancel webinar 'test webinar'", False),
+    ]
+
+
+async def test__cancel_event__free_registration_cancelled__pays_out_nothing(
+    session: AsyncSession, add_coins: AsyncMock
+) -> None:
+    await db.add(_webinar(timedelta(days=2)))
+    await db.add(_participant(STUDENT, 0))
+
+    assert await cancel_event("webinar", _user(STUDENT)) is True
+
+    add_coins.assert_not_awaited()
+    assert await db.all(select(WebinarParticipant)) == []
+
+
 async def test__cancel_event__registration_cancelled_within_a_day__forbidden(
     session: AsyncSession, add_coins: AsyncMock, send_email: AsyncMock
 ) -> None:
     await db.add(_webinar(timedelta(hours=12)))
-    await db.add(WebinarParticipant(webinar_id="webinar", user_id=STUDENT))
+    await db.add(_participant(STUDENT))
 
     with pytest.raises(PermissionDeniedError):
         await cancel_event("webinar", _user(STUDENT))
@@ -280,7 +358,7 @@ async def test__cancel_event__registration_cancelled__mails_both_sides(
     session: AsyncSession, send_email: AsyncMock
 ) -> None:
     await db.add(_webinar(timedelta(days=8)))
-    await db.add(WebinarParticipant(webinar_id="webinar", user_id=STUDENT))
+    await db.add(_participant(STUDENT))
 
     await cancel_event("webinar", _user(STUDENT))
 
@@ -432,7 +510,7 @@ async def test__cancel_event__student_cancels_coaching__mails_both_sides(
 async def test__cancel_event__unknown_mail_address__cancels_anyway(
     session: AsyncSession, mocker: MockerFixture, add_coins: AsyncMock, send_email: AsyncMock
 ) -> None:
-    mocker.patch("api.endpoints.calendar.get_email", AsyncMock(return_value=None))
+    mocker.patch("api.utils.email.get_email", AsyncMock(return_value=None))
     await db.add(_slot(timedelta(days=2)))
 
     assert await cancel_event("slot", _user(LECTURER)) is True

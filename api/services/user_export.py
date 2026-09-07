@@ -63,6 +63,7 @@ async def export_user_data(user_id: str) -> schemas.UserDataExport:
                 skill_id=participation.webinar.skill_id,
                 name=participation.webinar.name,
                 start=participation.webinar.start,
+                paid_coins=participation.paid_coins,
             )
             async for participation in await db.stream(filter_by(models.WebinarParticipant, user_id=user_id))
         ],

@@ -23,11 +23,10 @@ from api.schemas.calendar import Webinar
 from api.schemas.user import User
 from api.schemas.webinars import CreateWebinar, UpdateWebinar
 from api.services import shop
-from api.services.auth import get_email
 from api.services.skills import get_skill_levels
 from api.settings import settings
 from api.utils.cache import clear_cache
-from api.utils.email import BOOKED_WEBINAR
+from api.utils.email import BOOKED_WEBINAR, notify
 from api.utils.utc import datetime_link, utcfromtimestamp, utcnow
 
 
@@ -171,26 +170,32 @@ async def register_for_webinar(webinar: models.Webinar = get_webinar, user: User
     if len(webinar.participants) >= webinar.max_participants:
         raise AlreadyFullError
 
-    if not await models.EmergencyCancel.exists(webinar.creator) and not await shop.spend_coins(
-        user.id, webinar.price, f"Webinar '{webinar.name}'"
-    ):
-        raise NotEnoughCoinsError
+    # a lecturer who had to cancel an event owes its participants a free booking; that debt is settled by the next
+    # booking it makes free, so it is consumed here instead of standing until one of their events takes place
+    if await models.EmergencyCancel.delete(webinar.creator):
+        paid_coins = 0
+    else:
+        paid_coins = webinar.price
+        if not await shop.spend_coins(user.id, paid_coins, f"Webinar '{webinar.name}'"):
+            raise NotEnoughCoinsError
 
-    webinar.participants.append(models.WebinarParticipant(user_id=user.id, webinar_id=webinar.id))
+    webinar.participants.append(
+        models.WebinarParticipant(user_id=user.id, webinar_id=webinar.id, paid_coins=paid_coins)
+    )
 
     await clear_cache("calendar")
 
     include_link = webinar.start - utcnow() < timedelta(days=1)
-    if email := await get_email(user.id):
-        await BOOKED_WEBINAR.send(
-            email,
-            title=webinar.name,
-            date=webinar.start.strftime("%d.%m.%Y"),
-            time=webinar.start.strftime("%H:%M"),
-            datetime_link=datetime_link(webinar.start),
-            link=webinar.link if include_link else settings.event_url.format(id=webinar.id),
-            coins=webinar.price,
-        )
+    await notify(
+        BOOKED_WEBINAR,
+        user.id,
+        title=webinar.name,
+        date=webinar.start.strftime("%d.%m.%Y"),
+        time=webinar.start.strftime("%H:%M"),
+        datetime_link=datetime_link(webinar.start),
+        link=webinar.link if include_link else settings.event_url.format(id=webinar.id),
+        coins=paid_coins,
+    )
 
     return await webinar.serialize(include_link, False, True, False)
 

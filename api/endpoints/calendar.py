@@ -13,11 +13,10 @@ from api.auth import require_verified_email, user_auth
 from api.database import db, select
 from api.exceptions.auth import PermissionDeniedError, verified_responses
 from api.exceptions.slots import SlotNotFoundException
-from api.logger import get_logger
 from api.schemas.calendar import Calendar, CalendarToken, Coaching, EventType, Webinar
 from api.schemas.user import User
 from api.services import shop
-from api.services.auth import get_email, get_userinfo, is_admin
+from api.services.auth import get_userinfo, is_admin
 from api.services.ics import create_ics
 from api.services.skills import get_skill_levels
 from api.settings import settings
@@ -27,12 +26,10 @@ from api.utils.email import (
     CANCELLED_COACHING_LECTURER,
     CANCELLED_WEBINAR,
     CANCELLED_WEBINAR_LECTURER,
-    Message,
+    notify,
 )
 from api.utils.utc import datetime_link, utcfromtimestamp, utcnow
 
-
-logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -371,16 +368,18 @@ async def _cancel_webinar_registration(
     """
     Cancel the registration of a single participant.
 
-    How much of the price is refunded depends on how far away the webinar is; the share that is not refunded is
-    credited to the lecturer, whose slot is blocked at such short notice.
+    How much of what the participant paid is refunded depends on how far away the webinar is; the share that is not
+    refunded is credited to the lecturer, whose slot is blocked at such short notice. Both are computed from the
+    amount that was charged for this registration, not from the current price of the webinar, so a registration that
+    cost nothing pays out nothing.
     """
 
     if delta >= timedelta(days=7):
-        student_coins = webinar.price
+        student_coins = participant.paid_coins
         instructor_coins = 0
     elif delta >= timedelta(days=1):
-        student_coins = webinar.price // 2
-        instructor_coins = int(webinar.price * (1 - settings.event_fee) // 2)
+        student_coins = participant.paid_coins // 2
+        instructor_coins = int(participant.paid_coins * (1 - settings.event_fee) // 2)
     else:
         raise PermissionDeniedError
 
@@ -394,8 +393,8 @@ async def _cancel_webinar_registration(
     await clear_cache("calendar")
 
     mail = _event_mail_args(webinar.start) | {"title": webinar.name}
-    await _notify(CANCELLED_WEBINAR, user_id, **mail, by_lecturer=False, coins=student_coins)
-    await _notify(CANCELLED_WEBINAR_LECTURER, webinar.creator, **mail, whole_event=False, coins=instructor_coins)
+    await notify(CANCELLED_WEBINAR, user_id, **mail, by_lecturer=False, coins=student_coins)
+    await notify(CANCELLED_WEBINAR_LECTURER, webinar.creator, **mail, whole_event=False, coins=instructor_coins)
 
     return True
 
@@ -404,20 +403,22 @@ async def _cancel_webinar(webinar: models.Webinar) -> bool:
     """
     Cancel a whole webinar, either as its lecturer or as an admin.
 
-    The webinar does not take place, so every participant gets the price back instead of being charged again.
+    The webinar does not take place, so every participant gets back exactly what they were charged for their
+    registration instead of being charged again. Refunding the price of the webinar instead would pay out coins for
+    a registration that was free.
     """
 
     mail = _event_mail_args(webinar.start) | {"title": webinar.name}
 
     for participant in webinar.participants:
-        if webinar.price:
-            await shop.add_coins(participant.user_id, webinar.price, f"Cancel webinar '{webinar.name}'", False)
-        await _notify(CANCELLED_WEBINAR, participant.user_id, **mail, by_lecturer=True, coins=webinar.price)
+        if participant.paid_coins:
+            await shop.add_coins(participant.user_id, participant.paid_coins, f"Cancel webinar '{webinar.name}'", False)
+        await notify(CANCELLED_WEBINAR, participant.user_id, **mail, by_lecturer=True, coins=participant.paid_coins)
 
     if webinar.participants:
         await models.EmergencyCancel.create(webinar.creator)
 
-    await _notify(CANCELLED_WEBINAR_LECTURER, webinar.creator, **mail, whole_event=True, coins=0)
+    await notify(CANCELLED_WEBINAR_LECTURER, webinar.creator, **mail, whole_event=True, coins=0)
 
     await db.delete(webinar)
     await clear_cache("calendar")
@@ -469,7 +470,7 @@ async def _try_cancel_coaching(event_id: str, user: User = user_auth) -> bool:
 
     await clear_cache("calendar")
 
-    await _notify(
+    await notify(
         CANCELLED_COACHING,
         student,
         **mail,
@@ -477,7 +478,7 @@ async def _try_cancel_coaching(event_id: str, user: User = user_auth) -> bool:
         by_lecturer=not by_student,
         coins=student_coins,
     )
-    await _notify(CANCELLED_COACHING_LECTURER, lecturer, **mail, by_student=by_student, coins=instructor_coins)
+    await notify(CANCELLED_COACHING_LECTURER, lecturer, **mail, by_student=by_student, coins=instructor_coins)
 
     return True
 
@@ -486,18 +487,3 @@ def _event_mail_args(start: datetime) -> dict[str, Any]:
     """Return the fields with which every event mail describes the date of the event."""
 
     return {"date": start.strftime("%d.%m.%Y"), "time": start.strftime("%H:%M"), "datetime_link": datetime_link(start)}
-
-
-async def _notify(message: Message, user_id: str, **kwargs: Any) -> None:
-    """
-    Send a notification to a user, if the auth service knows an address for them.
-
-    The booking has already been changed and the coins have already been moved when this is called, so a mail that
-    cannot be rendered or handed to the mail server is logged instead of failing the request.
-    """
-
-    try:
-        if email := await get_email(user_id):
-            await message.send(email, **kwargs)
-    except Exception:
-        logger.exception("could not send %s to user %s", message.template, user_id)

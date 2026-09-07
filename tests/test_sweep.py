@@ -47,7 +47,7 @@ async def data(database: None) -> None:
                 price=1337,
             )
         )
-        await db.add(WebinarParticipant(webinar_id="webinar", user_id=DELETED))
+        await db.add(WebinarParticipant(webinar_id="webinar", user_id=DELETED, paid_coins=1337))
         await db.add(
             WeeklySlot(id="weekly", user_id=UNKNOWN, weekday=3, start=time(10, 0), end=time(11, 0), last_slot=utcnow())
         )
