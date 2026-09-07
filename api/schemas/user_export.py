@@ -23,6 +23,7 @@ class WebinarParticipation(BaseModel):
     skill_id: str = Field(description="ID of the skill the webinar belongs to")
     name: str = Field(description="Title of the webinar")
     start: datetime = Field(description="Start of the webinar")
+    paid_coins: int = Field(description="Amount the user was charged for this registration in Morphcoins")
 
 
 class Slot(BaseModel):

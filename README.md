@@ -58,6 +58,77 @@ poe env             # show settings from .env file
 poe jwt             # generate a jwt with the given payload and ttl in seconds
 ```
 
+## Account Deletion
+When an account is deleted, the auth service calls `DELETE /_internal/users/{user_id}` on this microservice.
+The endpoint requires an internal token with the `events` audience and answers `204`, also for a user that has no data here, so it can be retried safely.
+
+Everything the user owns is deleted: the webinars they created together with the participants of those webinars, the slots and weekly slots they offer as a lecturer, their coachings, exams, emergency cancellations, lecturer ratings and the token of their ics calendar feed.
+Bookings of events that belong to somebody else are treated differently: a booked webinar loses its participant entry and a booked slot is freed instead of being deleted, so the other lecturer keeps their slot.
+The cache entries keyed on a user id are dropped as well.
+
+Because the auth service logs and swallows a failing call, a periodic sweep catches the deletions that were lost.
+It has no poe task and is installed as the `sweep-deleted-users` entry point:
+
+```bash
+poetry run sweep-deleted-users
+```
+
+It walks the distinct user ids found in every user id column in batches, asks the auth service for each one and deletes the data of every user it answers `404` for.
+The relevant settings are:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `AUTH_URL` | `""` | Base url of the auth service the sweep asks whether a user still exists. |
+| `INTERNAL_JWT_TTL` | `10` | Lifetime in seconds of the token used for those requests. |
+| `DELETED_USER_SWEEP_BATCH_SIZE` | `500` | Number of user ids loaded from the database per batch. |
+| `DELETED_USER_SWEEP_RATE_LIMIT` | `10` | Auth service requests per second. |
+
+In the NixOS module the sweep is a oneshot service with a timer, enabled through `academy.backend.events.sweepDeletedUsers.enable` (`interval`, default `daily`, and `randomizedDelay`, default `5m`).
+
+## Event Cancellations
+`DELETE /calendar/{event_id}` cancels a webinar or a coaching. Who is allowed to cancel and what happens to the MorphCoins depends on the role of the caller.
+
+Every refund is computed from the amount the participant was actually charged for their booking, which is stored on the booking (`events_webinar_participants.paid_coins` for a webinar, `events_slot.student_coins` for a coaching) and is not necessarily the current price of the event.
+A booking that was free therefore refunds nothing and pays the lecturer nothing, and a later price change does not change what is refunded.
+
+A participant who cancels their own booking is refunded depending on how far away the event is:
+
+| Time until the event | Refund | Lecturer |
+| --- | --- | --- |
+| at least 7 days | the amount paid | nothing |
+| at least 24 hours | half the amount paid | half of their share of it |
+| less than 24 hours | not possible, the request is answered `403` | – |
+
+A lecturer or an admin who cancels the event itself refunds every participant the amount they paid, because the event does not take place at all.
+A lecturer who does so while somebody has booked owes an emergency cancellation, which makes the next booking of one of their events free; that booking consumes the emergency cancellation, so it settles exactly one booking.
+Cancelling a coaching frees the slot, so the lecturer can be booked again for that time.
+
+Everybody whose booking changed is notified by e-mail (in German, with the logo embedded as described above): the participants of a cancelled webinar, the participant who cancelled a single registration, the student of a cancelled coaching and, in every case, the lecturer.
+The mails name the event, its date and the refunded amount.
+They are sent after the booking has been changed and are logged instead of raised if they fail, so a cancellation never fails because of a mail.
+
+## Calendar Subscriptions
+`GET /calendar` returns an `ics_token`, which the frontend turns into the subscription url `…/events/calendar/{token}/academy.ics`.
+That url is a bearer credential: whoever knows it can read the events of that user without logging in.
+
+The token is a random value stored per user in `events_calendar_tokens` and created the first time the calendar is loaded.
+`POST /calendar/token/rotate` replaces it, which invalidates every calendar client that still uses the old url.
+It is deleted with the rest of the user's data on account deletion, so a deleted account's feed stops working immediately.
+
+## Internal Service Tokens
+Tokens for the `/_internal/…` endpoints are signed per audience.
+An outgoing token is signed with the secret of the service it is sent to, and an incoming one is verified with the secret of the `events` audience:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `INTERNAL_JWT_SECRET_AUTH` | `""` | Tokens this service sends to the auth service. |
+| `INTERNAL_JWT_SECRET_SHOP` | `""` | Tokens this service sends to the shop service. |
+| `INTERNAL_JWT_SECRET_SKILLS` | `""` | Tokens this service sends to the skills service. |
+| `INTERNAL_JWT_SECRET_EVENTS` | `""` | Tokens this service accepts on `/_internal/…`. |
+
+An empty value falls back to `JWT_SECRET`, so the services keep working until a dedicated secret is deployed to every sender and to the receiver of an audience.
+`JWT_SECRET` itself stays in use for the user access tokens the auth service issues.
+
 ## PyCharm configuration
 Configure the Python interpreter:
 

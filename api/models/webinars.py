@@ -72,9 +72,10 @@ async def clean_old_webinars() -> None:
                 webinar.creator, participant.user_id, webinar.skill_id, webinar.start, webinar.name
             )
             await add_xp(participant.user_id, webinar.skill_id, settings.webinar_participant_xp)
-        await shop.add_coins(
-            webinar.creator, int(len(webinar.participants) * webinar.price * (1 - settings.event_fee)), "Webinar", True
-        )
+        # the lecturer's share is computed from what the participants were charged, not from the price of the
+        # webinar, so a registration that was free pays out nothing
+        paid = sum(participant.paid_coins for participant in webinar.participants)
+        await shop.add_coins(webinar.creator, int(paid * (1 - settings.event_fee)), "Webinar", True)
         if webinar.participants:
             await EmergencyCancel.delete(webinar.creator)
         await add_xp(webinar.creator, webinar.skill_id, settings.webinar_lecturer_xp)

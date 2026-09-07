@@ -55,11 +55,13 @@ async def delete_user_data(user_id: str) -> None:
     # webinars created by the user, including the participants of these webinars
     webinar: Webinar
     async for webinar in await db.stream(filter_by(Webinar, creator=user_id)):
-        # the participants have paid for a webinar which is not going to take place anymore
-        if webinar.start > now and webinar.price:
+        # the participants have paid for a webinar which is not going to take place anymore; each of them gets back
+        # what they were charged, which is not the price of the webinar for a registration that was free
+        if webinar.start > now:
             for booked in webinar.participants:
-                await shop.add_coins(booked.user_id, webinar.price, f"Cancel webinar '{webinar.name}'", False)
-                refunds += 1
+                if booked.paid_coins:
+                    await shop.add_coins(booked.user_id, booked.paid_coins, f"Cancel webinar '{webinar.name}'", False)
+                    refunds += 1
         counts[WebinarParticipant.__tablename__] += len(webinar.participants)
         counts[Webinar.__tablename__] += 1
         await db.delete(webinar)
