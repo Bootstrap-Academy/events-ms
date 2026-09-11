@@ -90,13 +90,13 @@ async def main() -> None:
         row.state = "review"
     assert not (await booking_availability.read(oid))[0]
     for statement in [
-        "UPDATE events_booking_contracts SET candidate='{}' WHERE id=:id",
+        "UPDATE events_booking_contracts SET candidate=:candidate WHERE id=:id",
         "UPDATE events_booking_availability SET proof=proof WHERE order_id=:id",
         "DELETE FROM events_booking_availability WHERE order_id=:id",
     ]:
         try:
             async with db.engine.begin() as conn:
-                await conn.execute(text(statement), {"id": oid})
+                await conn.execute(text(statement), {"id": oid, "candidate": "{}"})
         except DBAPIError:
             pass
         else:
@@ -104,7 +104,8 @@ async def main() -> None:
     print(
         "PASS migrated",
         db.engine.dialect.name,
-        "SQL-null first candidate, committed source DB clock/read/witness, closure without history loss and immutable candidate/proof guards",
+        "SQL-null first candidate, committed source DB clock/read/witness, "
+        "closure without history loss and immutable candidate/proof guards",
         flush=True,
     )
     await db.engine.dispose()

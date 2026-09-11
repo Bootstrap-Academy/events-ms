@@ -7,25 +7,38 @@ Remote original declarations, succession authority and settlement are fixtures.
 from copy import deepcopy
 from datetime import timedelta
 from types import SimpleNamespace
+from typing import Any, AsyncIterator, Awaitable, Callable, cast
 from uuid import uuid4
 
 import pytest
+from _pytest.monkeypatch import MonkeyPatch
 from fastapi import HTTPException
+from pytest_mock import MockerFixture
 from sqlalchemy import update
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from api.database import Base, db, filter_by, select
-from api.models import BookingPayment, EventRightGrant, RetainedEventRight, SettlementClaim, Webinar, WebinarParticipant
+from api.models import (
+    BookingPayment,
+    EventRightGrant,
+    RetainedEventRight,
+    SettlementClaim,
+    Slot,
+    Webinar,
+    WebinarParticipant,
+)
 from api.models.booking_contract import BookingContract
+from api.models.booking_payment import CommercialErasureReceipt
 from api.models.settlement import CoinOperation
 from api.models.webinar_participants import own_seat_changes
 from api.models.webinars import clean_old_webinars
 from api.services import commercial, event_cancellations, retained_events, settlements
 from api.services.user_deletion import delete_user_data
 from tests.payment_fixtures import paid_participant
+from tests.required import required, unwrapped
+from tests.services import test_retained_events
 from tests.services.test_event_cancellations import declaration
 from tests.services.test_event_succession import authorize, preserved
-from tests.services import test_retained_events
 from tests.services.test_retained_events import booking, canonical
 from tests.services.test_user_deletion import OTHER, THIRD, USER
 
@@ -34,7 +47,7 @@ remote = test_retained_events.remote
 
 
 @pytest.fixture
-async def committed_snapshot(monkeypatch):
+async def committed_snapshot(monkeypatch: MonkeyPatch) -> AsyncIterator[Callable[[], Awaitable[AsyncEngine]]]:
     """A separate local SQLite view, explicitly selected instead of the SQLite shortcut.
 
     The real owning session still uses its fixture engine. This is a projection
@@ -44,13 +57,19 @@ async def committed_snapshot(monkeypatch):
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
 
-    async def snapshot():
+    async def snapshot() -> AsyncEngine:
         await db.session.flush()
         async with engine.begin() as connection:
-            for model in (BookingPayment, BookingContract, RetainedEventRight, WebinarParticipant):
-                rows = (await db.exec(model.__table__.select())).mappings().all()
+            tables = (
+                BookingPayment.__table__,
+                BookingContract.__table__,
+                RetainedEventRight.__table__,
+                WebinarParticipant.__table__,
+            )
+            for table in tables:
+                rows = (await db.exec(table.select())).mappings().all()
                 if rows:
-                    await connection.execute(model.__table__.insert(), [dict(row) for row in rows])
+                    await connection.execute(table.insert(), [dict(row) for row in rows])
         monkeypatch.setattr(db, "committed_read_engine", engine)
         monkeypatch.setattr(db, "engine", SimpleNamespace(dialect=SimpleNamespace(name="committed_projection_test")))
         return engine
@@ -59,37 +78,41 @@ async def committed_snapshot(monkeypatch):
     await engine.dispose()
 
 
-async def ended_host(remote, mocker):
+async def ended_host(
+    remote: dict[str, Any], mocker: MockerFixture
+) -> tuple[Webinar | Slot, RetainedEventRight, BookingPayment, str]:
     event, right, payment_id = await preserved(remote, role="instructor")
     grant_id, _, _ = await authorize(mocker, right)
     await retained_events.deliver(USER, grant_id)
     await db.commit()
     mocker.patch("api.models.webinars.utcnow", return_value=event.end + timedelta(seconds=1))
-    await clean_old_webinars.__wrapped__()
+    await unwrapped(clean_old_webinars)()
     await db.commit()
     assert await db.get(Webinar, id=event.id) is None
     claims = await db.all(select(SettlementClaim))
     assert len(claims) == 1 and claims[0].user_id == USER
     assert await retained_events.right_for(payment_id, "participant") is None
-    return event, right, await db.get(BookingPayment, id=payment_id), grant_id
+    return event, right, required(await db.get(BookingPayment, id=payment_id)), grant_id
 
 
 @pytest.mark.parametrize("payer_first", [True, False])
 async def test_detached_original_payer_and_provider_keep_one_component_in_either_order(
-    session, remote, mocker, payer_first
-):
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture, payer_first: bool
+) -> None:
     event, right, payment, grant_id = await ended_host(remote, mocker)
     payment_before = deepcopy((payment.user_id, payment.original, payment.evidence))
     command, receipt = declaration(mocker, right, event.start - timedelta(microseconds=1))
     remote[OTHER] = canonical(OTHER)
     if payer_first:
         await delete_user_data(OTHER)
-        first = await db.first(filter_by(SettlementClaim, user_id=OTHER))
+        first: SettlementClaim = required(
+            cast(SettlementClaim | None, await db.first(filter_by(SettlementClaim, user_id=OTHER)))
+        )
         assert first.entitlement == "pending_evidence"
         identity = deepcopy((first.id, first.created_at, first.basis))
     result = await event_cancellations.receive(USER, command)
     if not payer_first:
-        first = await db.first(filter_by(SettlementClaim, user_id=OTHER))
+        first = required(cast(SettlementClaim | None, await db.first(filter_by(SettlementClaim, user_id=OTHER))))
         identity = deepcopy((first.id, first.created_at, first.basis))
         await delete_user_data(OTHER)
     await delete_user_data(OTHER)
@@ -102,14 +125,16 @@ async def test_detached_original_payer_and_provider_keep_one_component_in_either
     operations = await db.all(filter_by(CoinOperation, user_id=OTHER))
     assert len(operations) == 1 and operations[0].id == claim.id and operations[0].coins == payment.paid_coins
     assert (payment.user_id, payment.original, payment.evidence) == payment_before
-    assert (await db.get(EventRightGrant, id=grant_id)).state == "withdrawn"
+    assert (required(await db.get(EventRightGrant, id=grant_id))).state == "withdrawn"
     assert result["received_at"] == receipt["received_at"]
     evidence = await event_cancellations.claim_evidence(claim.id)
     assert len(evidence) == 1 and evidence[0]["command_id"] == command
     assert await db.get(Webinar, id=event.id) is None
 
 
-async def test_detached_claim_flush_rollback_then_exact_batch_retry(session, remote, mocker):
+async def test_detached_claim_flush_rollback_then_exact_batch_retry(
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture
+) -> None:
     _, _, payment, _ = await ended_host(remote, mocker)
     remote[OTHER] = canonical(OTHER)
     receipt = await commercial.erasure_receipt(OTHER)
@@ -123,22 +148,29 @@ async def test_detached_claim_flush_rollback_then_exact_batch_retry(session, rem
     await session.rollback()
     assert await db.all(filter_by(SettlementClaim, user_id=OTHER)) == []
     assert await db.all(filter_by(CoinOperation, user_id=OTHER)) == []
-    receipt = await db.get(commercial.CommercialErasureReceipt, subject=OTHER)
+    receipt = required(await db.get(CommercialErasureReceipt, subject=OTHER))
     await commercial.preserve_detached_claims(OTHER, receipt, batch_id)
     await db.commit()
-    first = await db.first(filter_by(SettlementClaim, user_id=OTHER))
+    first: SettlementClaim = required(
+        cast(SettlementClaim | None, await db.first(filter_by(SettlementClaim, user_id=OTHER)))
+    )
     identity = first.id
     await commercial.preserve_detached_claims(OTHER, receipt, batch_id)
     await db.commit()
-    assert (await db.first(filter_by(SettlementClaim, user_id=OTHER))).id == identity
+    assert (
+        required(cast(SettlementClaim | None, await db.first(filter_by(SettlementClaim, user_id=OTHER))))
+    ).id == identity
     assert first.payment_ids == [payment_id] and first.entitlement == "pending_evidence"
     assert receipt.canonical == original_receipt
     assert len(await db.all(filter_by(CoinOperation, user_id=OTHER))) == 1
 
 
 async def test_detached_discovers_committed_and_own_payments_before_withdrawing_grants(
-    session, remote, mocker, committed_snapshot
-):
+    session: AsyncSession,
+    remote: dict[str, Any],
+    mocker: MockerFixture,
+    committed_snapshot: Callable[[], Awaitable[AsyncEngine]],
+) -> None:
     _, _, payment, _ = await ended_host(remote, mocker)
     committed_id = payment.id
     await db.exec(
@@ -171,7 +203,7 @@ async def test_detached_discovers_committed_and_own_payments_before_withdrawing_
     # actual own records remain visible. The reserved reader executes real SQL.
     execute = db.exec
 
-    async def old_payment_projection(query):
+    async def old_payment_projection(query: Any) -> Any:
         if (
             getattr(query, "_for_update_arg", None) is None
             and hasattr(query, "selected_columns")
@@ -185,12 +217,12 @@ async def test_detached_discovers_committed_and_own_payments_before_withdrawing_
     lock_order = []
     first = db.first
 
-    async def observe_lock(query):
+    async def observe_lock(query: Any) -> Any:
         if (
             getattr(query, "_for_update_arg", None) is not None
             and query.column_descriptions[0]["entity"] is BookingPayment
         ):
-            row = await first(query)
+            row = required(cast(BookingPayment | None, await first(query)))
             lock_order.append(row.id)
             return row
         return await first(query)
@@ -198,14 +230,14 @@ async def test_detached_discovers_committed_and_own_payments_before_withdrawing_
     mocker.patch.object(db, "first", side_effect=observe_lock)
     preserved_right = retained_events.preserved
 
-    async def verify_inventory_before_claims(payment_id, subject=None):
+    async def verify_inventory_before_claims(payment_id: str, subject: str | None = None) -> Any:
         assert {committed_id, own_id} <= set(lock_order)
         return await preserved_right(payment_id, subject)
 
     mocker.patch.object(retained_events, "preserved", side_effect=verify_inventory_before_claims)
     withdraw = retained_events.withdraw_grants
 
-    async def verify_payment_ownership(subject):
+    async def verify_payment_ownership(subject: str) -> None:
         assert {committed_id, own_id} <= set(lock_order)
         await withdraw(subject)
 
@@ -225,7 +257,9 @@ async def test_detached_discovers_committed_and_own_payments_before_withdrawing_
 @pytest.mark.parametrize(
     "state,recipient,expected", [("cancelled", THIRD, False), ("active", OTHER, False), ("active", THIRD, True)]
 )
-async def test_preserved_refreshes_mutable_ownership_and_state(session, remote, state, recipient, expected):
+async def test_preserved_refreshes_mutable_ownership_and_state(
+    session: AsyncSession, remote: dict[str, Any], state: str, recipient: str, expected: bool
+) -> None:
     _, right, payment_id = await preserved(remote)
     right.source_subject = OTHER
     right.current_subject = THIRD
@@ -242,40 +276,48 @@ async def test_preserved_refreshes_mutable_ownership_and_state(session, remote, 
     assert right.current_subject == recipient and right.state == state
 
 
-async def test_right_creation_own_flush_and_rollback_preserve_original_identity(session, remote, mocker):
+async def test_right_creation_own_flush_and_rollback_preserve_original_identity(
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture
+) -> None:
     event, booked = await booking()
-    payment = await db.get(BookingPayment, id=booked.payment_id)
+    payment = required(await db.get(BookingPayment, id=booked.payment_id))
     receipt = SimpleNamespace(canonical=canonical(USER), observed_at=event.start)
     await db.commit()
     event_id, payment_id = event.id, payment.id
     probes = mocker.spy(db, "first")
     assert await retained_events.preserve_on_erasure(USER, receipt, payment, event, "participant")
-    right = await retained_events.right_for(payment_id, "participant")
+    right = required(await retained_events.right_for(payment_id, "participant"))
     original_id, original_bytes = right.id, deepcopy(right.original)
     assert await retained_events.preserve_on_erasure(USER, receipt, payment, event, "participant")
-    assert (await retained_events.right_for(payment_id, "participant")).original == original_bytes
+    assert (required(await retained_events.right_for(payment_id, "participant"))).original == original_bytes
     for call in probes.call_args_list:
         query = call.args[0]
         if getattr(query, "_for_update_arg", None) is not None and "events_retained_rights" in str(query):
             assert "events_retained_rights.id =" in str(query)
     await session.rollback()
     assert await retained_events.right_for(payment_id, "participant") is None
-    event = await db.get(Webinar, id=event_id)
-    payment = await db.get(BookingPayment, id=payment_id)
+    event = required(await db.get(Webinar, id=event_id))
+    payment = required(await db.get(BookingPayment, id=payment_id))
     await retained_events.preserve_on_erasure(USER, receipt, payment, event, "participant")
-    assert (await retained_events.right_for(payment_id, "participant")).id == original_id
+    assert (required(await retained_events.right_for(payment_id, "participant"))).id == original_id
     assert len(await db.all(select(RetainedEventRight))) == 1
 
 
 @pytest.mark.parametrize("change", ["delete_target", "move_original", "add_target", "delete_original"])
-async def test_delivery_applies_actual_own_flushed_occupancy(session, remote, mocker, committed_snapshot, change):
+async def test_delivery_applies_actual_own_flushed_occupancy(
+    session: AsyncSession,
+    remote: dict[str, Any],
+    mocker: MockerFixture,
+    committed_snapshot: Callable[[], Awaitable[AsyncEngine]],
+    change: str,
+) -> None:
     event, right, payment_id = await preserved(remote)
     target = None
     if change == "delete_target":
         target = await db.add(paid_participant(webinar_id=event.id, user_id=THIRD, paid_coins=99))
         await db.commit()
     await committed_snapshot()
-    original = await db.get(WebinarParticipant, webinar_id=event.id, user_id=USER)
+    original = required(await db.get(WebinarParticipant, webinar_id=event.id, user_id=USER))
     if change == "delete_target":
         await db.delete(target)
     elif change == "move_original":
@@ -296,17 +338,20 @@ async def test_delivery_applies_actual_own_flushed_occupancy(session, remote, mo
         assert first["state"] == "granted" and await retained_events.deliver(USER, grant_id) == first
         seats = await db.all(filter_by(WebinarParticipant, webinar_id=event.id))
         assert [(row.user_id, row.payment_id) for row in seats] == [(THIRD, payment_id)]
-    assert (await db.get(BookingPayment, id=payment_id)).user_id == USER
+    assert (required(await db.get(BookingPayment, id=payment_id))).user_id == USER
 
 
 @pytest.mark.parametrize("commit_inner", [True, False])
 async def test_seat_journal_tracks_autoflush_nested_commit_rollback_and_outer_rollback(
-    session, remote, committed_snapshot, commit_inner
-):
+    session: AsyncSession,
+    remote: dict[str, Any],
+    committed_snapshot: Callable[[], Awaitable[AsyncEngine]],
+    commit_inner: bool,
+) -> None:
     event, right, payment_id = await preserved(remote)
     event_id = event.id
     await committed_snapshot()
-    booked = await db.get(WebinarParticipant, webinar_id=event_id, user_id=USER)
+    booked = required(await db.get(WebinarParticipant, webinar_id=event_id, user_id=USER))
     outer = await session.begin_nested()
     booked.user_id = THIRD
     # This service query autoflushes through its normal flush boundary.
@@ -332,7 +377,9 @@ async def test_seat_journal_tracks_autoflush_nested_commit_rollback_and_outer_ro
     assert (await retained_events.webinar_seats(event_id, payment_id, THIRD))[0].user_id == USER
 
 
-async def test_seat_journal_cascade_and_outer_commit_release_changes(session, remote, committed_snapshot):
+async def test_seat_journal_cascade_and_outer_commit_release_changes(
+    session: AsyncSession, remote: dict[str, Any], committed_snapshot: Callable[[], Awaitable[AsyncEngine]]
+) -> None:
     event, _, payment_id = await preserved(remote)
     event_id = event.id
     await committed_snapshot()
@@ -346,8 +393,12 @@ async def test_seat_journal_cascade_and_outer_commit_release_changes(session, re
 
 @pytest.mark.parametrize("no_op_dirty", [False, True])
 async def test_seat_discovery_ignores_a_stale_loaded_destination(
-    session, remote, mocker, committed_snapshot, no_op_dirty
-):
+    session: AsyncSession,
+    remote: dict[str, Any],
+    mocker: MockerFixture,
+    committed_snapshot: Callable[[], Awaitable[AsyncEngine]],
+    no_op_dirty: bool,
+) -> None:
     event, right, payment_id = await preserved(remote)
     target = await db.add(paid_participant(webinar_id=event.id, user_id=THIRD, paid_coins=99))
     await db.commit()

@@ -6,7 +6,7 @@ identifies an earning. Instructor coins stay in the separate settlement lane.
 """
 
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import or_
@@ -31,7 +31,7 @@ async def record(event: Any, payment: Any, role: str, user_id: str, xp: int) -> 
         filter_by(EventBenefit, id=identity).with_for_update().execution_options(populate_existing=True)
     )
     if prior is not None:
-        return prior.id
+        return cast(str, prior.id)
     if role == "instructor":
         source_subject = payment.original["commercial_event"]["instructor_id"] if payment else event.user_id
     else:

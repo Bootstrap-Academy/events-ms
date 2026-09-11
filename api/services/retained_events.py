@@ -3,7 +3,7 @@
 import hashlib
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import NAMESPACE_URL, uuid5
 
 from api.database import db, filter_by, select
@@ -23,8 +23,9 @@ async def lock_subject(subject: str) -> EventSubjectGuard:
     guard = await db.first(
         filter_by(EventSubjectGuard, subject=subject).with_for_update().execution_options(populate_existing=True)
     )
-    assert guard is not None
-    return guard
+    if not (guard is not None):
+        raise AssertionError("Required original evidence is unavailable or mismatched")
+    return cast(EventSubjectGuard, guard)
 
 
 async def require_current_subject(subject: str) -> EventSubjectGuard:
@@ -101,7 +102,8 @@ async def booking_event_ids(subject: str) -> list[str]:
     guard = await db.first(
         filter_by(EventSubjectGuard, subject=subject).with_for_update().execution_options(populate_existing=True)
     )
-    assert guard is not None
+    if not (guard is not None):
+        raise AssertionError("Required original evidence is unavailable or mismatched")
     return [entry["event_id"] for entry in (guard.booking_reservations or {}).values()]
 
 
@@ -188,7 +190,7 @@ async def right_for(payment_id: str, role: str) -> RetainedEventRight | None:
     )
     if right is None or right.payment_id != payment_id or right.role != role:
         raise ValueError("Original event right identity changed")
-    return right
+    return cast(RetainedEventRight, right)
 
 
 async def preserve_on_erasure(subject: str, receipt: Any, payment: Any, event: Any, role: str) -> bool:
@@ -456,7 +458,8 @@ async def deliver(source_subject: str, grant_id: str) -> dict[str, Any]:
         prior = await db.first(
             filter_by(EventRightGrant, id=grant_id).with_for_update().execution_options(populate_existing=True)
         )
-        assert prior is not None
+        if not (prior is not None):
+            raise AssertionError("Required original evidence is unavailable or mismatched")
         return delivery_result(prior)
     authority = await successor_authority(source_subject, grant_id)
     if authority is None:

@@ -1,24 +1,36 @@
+import json
 from datetime import timedelta
+from typing import Any, AsyncIterator, Awaitable, Callable, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
-import json
-import httpx
-from fastapi import HTTPException
-from api.models import SettlementClaim, CoinOperation
-from api.models.ordinary_cancellation import OrdinaryEventCancellation
-from api.services import ordinary_cancellations as ordinary, settlements
-from api.schemas.ordinary_cancellation import CancellationDeclaration, CancellationPreparation
 
+import httpx
 import pytest
+from fastapi import HTTPException
+from httpx import AsyncClient
 from pytest_mock import MockerFixture
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import db, select
 from api.endpoints.calendar import cancel_event, download_ics, rotate_ics_token
-from api.models import CalendarToken, EmergencyCancel, EventType, Slot, Webinar, WebinarParticipant
+from api.models import (
+    CalendarToken,
+    CoinOperation,
+    EmergencyCancel,
+    EventType,
+    SettlementClaim,
+    Slot,
+    Webinar,
+    WebinarParticipant,
+)
+from api.models.ordinary_cancellation import OrdinaryEventCancellation
+from api.schemas.ordinary_cancellation import CancellationDeclaration, CancellationPreparation
 from api.schemas.user import User
+from api.services import ordinary_cancellations as ordinary
+from api.services import settlements
 from api.utils.utc import utcnow
 from tests.payment_fixtures import paid_participant, paid_slot
+from tests.required import required
 
 
 USER = "40ab0e5c-b7ee-4a25-9d10-1eaf3c62d2bd"
@@ -107,12 +119,12 @@ def _slot(start: timedelta, booked_by: str | None = STUDENT) -> Slot:
 
 
 @pytest.fixture(autouse=True)
-def local_effects(mocker):
+def local_effects(mocker: MockerFixture) -> AsyncMock:
     mocker.patch("api.services.ordinary_cancellations.clear_cache", AsyncMock())
     return mocker.patch("api.services.settlements.finish", AsyncMock())
 
 
-def declaration(target):
+def declaration(target: Any) -> dict[str, Any]:
     return {
         "target_id": target["id"],
         "cancel_selected_scope": True,
@@ -122,8 +134,8 @@ def declaration(target):
 
 @pytest.mark.parametrize("denial", [None, "unauthorized", "invalid_schema"])
 async def test_route_records_completed_declaration_body_before_slow_current_auth_and_only_persists_valid_intake(
-    session, client, mocker, denial
-):
+    session: AsyncSession, client: AsyncClient, mocker: MockerFixture, denial: str
+) -> None:
     webinar = await db.add(_webinar(timedelta(days=8)))
     await db.add(_participant(STUDENT, paid_coins=42))
     received = utcnow().replace(microsecond=654321)
@@ -140,7 +152,7 @@ async def test_route_records_completed_declaration_body_before_slow_current_auth
     )
     mocker.patch("api.schemas.user.UserAccessToken.is_revoked", AsyncMock(return_value=False))
 
-    async def authority(access_token, expected_user_id):
+    async def authority(access_token: str, expected_user_id: str) -> Any:
         assert clock["now"] == received, "timestamp is observed after complete body arrival"
         clock["now"] += timedelta(seconds=10)
         return None if denial == "unauthorized" else _user(STUDENT)
@@ -152,7 +164,7 @@ async def test_route_records_completed_declaration_body_before_slow_current_auth
         body["client_received_at"] = received.isoformat()
     encoded = json.dumps(body).encode()
 
-    async def chunks():
+    async def chunks() -> AsyncIterator[bytes]:
         yield encoded[:10]
         clock["now"] = received
         yield encoded[10:]
@@ -170,24 +182,32 @@ async def test_route_records_completed_declaration_body_before_slow_current_auth
     else:
         assert response.status_code == 200, response.text
         assert response.json()["received_at"] == received.isoformat()
-        claim = await db.first(select(SettlementClaim).where(SettlementClaim.user_id == STUDENT))
+        claim: SettlementClaim = required(
+            cast(
+                SettlementClaim | None,
+                await db.first(select(SettlementClaim).where(SettlementClaim.user_id == STUDENT)),
+            )
+        )
         assert claim.coins == 42 and claim.entitlement == "established"
         assert response.json()["financial_satisfaction"] is False
 
 
-async def test_old_event_only_public_and_internal_callers_fail_without_creating_a_declaration(session):
+async def test_old_event_only_public_and_internal_callers_fail_without_creating_a_declaration(
+    session: AsyncSession,
+) -> None:
     from api.endpoints.internal.users import cancel_recipient_event
 
     event = await db.add(_webinar(timedelta(days=9)))
     await db.add(_participant(STUDENT))
     await db.commit()
-    for operation in [
+    operations: list[Callable[[], Awaitable[None]]] = [
         lambda: cancel_event(event.id, _user(STUDENT)),
         lambda: cancel_recipient_event(STUDENT, event.id),
-    ]:
+    ]
+    for operation in operations:
         with pytest.raises(HTTPException) as exc:
             await operation()
-        assert exc.value.status_code == 409 and exc.value.detail["cancellation_recorded"] is False
+        assert exc.value.status_code == 409 and cast(dict[str, Any], exc.value.detail)["cancellation_recorded"] is False
     assert len(await db.all(select(WebinarParticipant))) == 1
     assert await db.all(select(OrdinaryEventCancellation)) == []
 
@@ -195,8 +215,8 @@ async def test_old_event_only_public_and_internal_callers_fail_without_creating_
 @pytest.mark.parametrize("paid", [0, 42, 1337])
 @pytest.mark.parametrize("days", [9, 1, -1])
 async def test_student_cancellation_uses_original_paid_amount_and_reviews_late_claims_without_half_or_forfeiture(
-    session, paid, days
-):
+    session: AsyncSession, paid: int, days: int
+) -> None:
     event = await db.add(_webinar(timedelta(days=days), price=9999))
     await db.add(_participant(STUDENT, paid_coins=paid))
     await db.commit()
@@ -204,7 +224,9 @@ async def test_student_cancellation_uses_original_paid_amount_and_reviews_late_c
     command, body = str(uuid4()), CancellationDeclaration(**declaration(prepared))
     result = await ordinary.receive(_user(STUDENT), command, body)
     assert result["state"] == "applied"
-    claim = await db.first(select(SettlementClaim).where(SettlementClaim.user_id == STUDENT))
+    claim: SettlementClaim = required(
+        cast(SettlementClaim | None, await db.first(select(SettlementClaim).where(SettlementClaim.user_id == STUDENT)))
+    )
     assert claim.coins == paid and claim.entitlement == ("established" if days == 9 else "pending_evidence")
     assert await db.get(WebinarParticipant, webinar_id=event.id, user_id=STUDENT) is None
     assert await db.get(Webinar, id=event.id) is not None
@@ -214,8 +236,8 @@ async def test_student_cancellation_uses_original_paid_amount_and_reviews_late_c
 
 @pytest.mark.parametrize("with_students", [False, True])
 async def test_provider_whole_session_cancels_exact_original_orders_and_empty_session_has_no_waiver(
-    session, with_students
-):
+    session: AsyncSession, with_students: bool
+) -> None:
     event = await db.add(_webinar(timedelta(days=2)))
     if with_students:
         await db.add(_participant(STUDENT, paid_coins=42))
@@ -233,8 +255,8 @@ async def test_provider_whole_session_cancels_exact_original_orders_and_empty_se
 
 @pytest.mark.parametrize("contact", ["accepted", "missing", "unverified", "smtp_failure"])
 async def test_active_generic_notice_and_handoff_keep_original_origin_and_financial_uncertainty(
-    session, mocker, local_effects, contact
-):
+    session: AsyncSession, mocker: MockerFixture, local_effects: AsyncMock, contact: str
+) -> None:
     from api.services.internal import InternalService
     from api.utils import email
 
@@ -245,7 +267,7 @@ async def test_active_generic_notice_and_handoff_keep_original_origin_and_financ
     command = str(uuid4())
     result = await ordinary.receive(_user(STUDENT), command, CancellationDeclaration(**declaration(prepared)))
     assert result["state"] == "applied"
-    receipt = await db.get(OrdinaryEventCancellation, id=command)
+    receipt = required(await db.get(OrdinaryEventCancellation, id=command))
     sent = mocker.patch.object(
         email,
         "send_email",
@@ -253,7 +275,7 @@ async def test_active_generic_notice_and_handoff_keep_original_origin_and_financ
     )
     requests = []
 
-    def response(request):
+    def response(request: Any) -> Any:
         requests.append(str(request.url))
         if contact == "missing":
             return httpx.Response(404, json={})
@@ -270,7 +292,7 @@ async def test_active_generic_notice_and_handoff_keep_original_origin_and_financ
     )
     handoffs = []
 
-    async def commercial(operation, payload):
+    async def commercial(operation: str, payload: dict[str, Any]) -> Any:
         assert operation == "register_event"
         handoffs.append(payload)
         return {
@@ -281,7 +303,7 @@ async def test_active_generic_notice_and_handoff_keep_original_origin_and_financ
         }
 
     mocker.patch("api.services.shop.commercial", side_effect=commercial)
-    await settlements.deliver([receipt.result["batch_id"]])
+    await settlements.deliver([required(receipt.result)["batch_id"]])
     view = await ordinary.status(_user(STUDENT), command)
     assert view["financial_state"] == "pending" and view["financial_satisfaction"] is False
     assert view["notice_state"] == ("smtp_accepted" if contact == "accepted" else "pending")
@@ -295,5 +317,5 @@ async def test_active_generic_notice_and_handoff_keep_original_origin_and_financ
         html = " ".join(sent.await_args_list[0].args[2].split())
         assert command in html and "test webinar" in html and "keine Zahlung und keine Gutschrift" in html
         assert "50% Rückerstattung" not in html and "wieder gutgeschrieben" not in html
-        await settlements.deliver([receipt.result["batch_id"]])
+        await settlements.deliver([required(receipt.result)["batch_id"]])
         assert len(sent.await_args_list) == 2 and len(handoffs) == 1

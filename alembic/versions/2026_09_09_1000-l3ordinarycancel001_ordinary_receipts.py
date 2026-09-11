@@ -1,7 +1,9 @@
 """Separate ordinary authenticated declarations; no retained receipt changes/backfill."""
 
 from alembic import op
+
 import sqlalchemy as sa
+
 
 revision = "l3ordinarycancel001"
 down_revision = "l3eventcancel001"
@@ -9,7 +11,7 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade():
+def upgrade() -> None:
     op.create_table(
         "events_ordinary_cancellation_targets",
         sa.Column("id", sa.String(36), primary_key=True),
@@ -39,5 +41,5 @@ def upgrade():
     )
 
 
-def downgrade():
+def downgrade() -> None:
     raise RuntimeError("Preserve actual cancellation targets, declarations and original-claim evidence")

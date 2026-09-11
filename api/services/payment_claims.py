@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from api.database import db, filter_by, select
@@ -170,7 +170,7 @@ async def observe_cancellation(
     elif ordinary:
         await ordinary_cancellations.observe_claim(claim, ordinary, payments, entitlement, basis)
     else:
-        await event_cancellations.observe_claim(claim, retained, payments, entitlement, basis)
+        await event_cancellations.observe_claim(claim, cast(str, retained), payments, entitlement, basis)
 
 
 async def resolve(claim: SettlementClaim, payments: list[BookingPayment]) -> None:

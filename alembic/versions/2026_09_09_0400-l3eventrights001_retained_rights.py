@@ -1,7 +1,9 @@
 """Existing booking rights survive data-only erasure without inferred cancellation."""
 
 from alembic import op
+
 import sqlalchemy as sa
+
 
 revision = "l3eventrights001"
 down_revision = "l3claims001"

@@ -6,12 +6,15 @@ InnoDB waits. Native EC7 ordering has its own independent validation.
 
 from copy import deepcopy
 from types import SimpleNamespace
+from typing import Any, AsyncIterator, Awaitable, Callable, Iterator, Sequence, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from _pytest.monkeypatch import MonkeyPatch
+from pytest_mock import MockerFixture
 from sqlalchemy import false
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm.attributes import set_committed_value
 
 from api.database import Base, db, filter_by, select
@@ -22,6 +25,7 @@ from api.models.ordinary_cancellation import OrdinaryCancellationClaimEvidence
 from api.models.settlement import CoinOperation, SettlementBatch
 from api.services import commercial, event_cancellations, payment_claims, settlements
 from api.utils.utc import utcnow
+from tests.required import required
 from tests.services.test_event_cancellations import declaration, original
 from tests.services.test_event_succession import authorize
 from tests.services.test_retained_events import booking
@@ -29,7 +33,7 @@ from tests.services.test_user_deletion import USER, CommercialResponses
 
 
 @pytest.fixture(autouse=True)
-def commercial_remote(mocker):
+def commercial_remote(mocker: MockerFixture) -> Iterator[CommercialResponses]:
     remote = CommercialResponses()
     mocker.patch("api.services.shop.commercial", side_effect=remote.__call__)
     mocker.patch("api.services.user_deletion.clear_cache", AsyncMock())
@@ -40,18 +44,20 @@ def commercial_remote(mocker):
 
 
 @pytest.fixture
-def remote(commercial_remote):
+def remote(commercial_remote: CommercialResponses) -> dict[str, Any]:
     return commercial_remote.receipts
 
 
 @pytest.fixture
-async def committed_children(monkeypatch, mocker):
+async def committed_children(
+    monkeypatch: MonkeyPatch, mocker: MockerFixture
+) -> AsyncIterator[Callable[[Sequence[type[Base]]], Awaitable[None]]]:
     """Actual separate SQLite reader plus an explicitly simulated old local view."""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
 
-    async def snapshot(models):
+    async def snapshot(models: Any) -> None:
         await db.session.flush()
         async with engine.begin() as connection:
             for model in models:
@@ -62,7 +68,7 @@ async def committed_children(monkeypatch, mocker):
         monkeypatch.setattr(db, "engine", SimpleNamespace(dialect=SimpleNamespace(name="committed_projection_test")))
         execute, stream = db.exec, db.stream
 
-        def old_view(query):
+        def old_view(query: Any) -> Any:
             descriptions = getattr(query, "column_descriptions", [])
             if (
                 getattr(query, "_for_update_arg", None) is None
@@ -72,10 +78,10 @@ async def committed_children(monkeypatch, mocker):
                 return query.where(false())
             return query
 
-        async def old_execute(query):
+        async def old_execute(query: Any) -> Any:
             return await execute(old_view(query))
 
-        async def old_stream(query):
+        async def old_stream(query: Any) -> Any:
             return await stream(old_view(query))
 
         mocker.patch.object(db, "exec", side_effect=old_execute)
@@ -85,29 +91,32 @@ async def committed_children(monkeypatch, mocker):
     await engine.dispose()
 
 
-async def claimed(coins=1337):
+async def claimed(coins: int | None = 1337) -> tuple[SettlementClaim, BookingPayment]:
     event, booked = await booking()
-    payment = await db.get(BookingPayment, id=booked.payment_id)
+    payment = required(await db.get(BookingPayment, id=booked.payment_id))
     payment.paid_coins = coins
-    batch = await settlements.new_batch("cancellation", USER, event.id)
+    batch = required(await settlements.new_batch("cancellation", USER, event.id))
     await payment_claims.credit(batch.id, event.id, USER, [payment], "Original component", False)
     await db.commit()
-    return await db.first(select(SettlementClaim)), payment
+    return required(cast(SettlementClaim | None, await db.first(select(SettlementClaim)))), payment
 
 
-def immutable_payment(payment):
+def immutable_payment(payment: BookingPayment) -> dict[str, Any]:
     return deepcopy({column.name: getattr(payment, column.name) for column in payment.__table__.columns})
 
 
 async def test_existing_handoff_in_committed_view_replays_without_duplicate_or_receipt_replacement(
-    session, commercial_remote, mocker, committed_children
-):
+    session: AsyncSession,
+    commercial_remote: CommercialResponses,
+    mocker: MockerFixture,
+    committed_children: Callable[[Sequence[type[Base]]], Awaitable[None]],
+) -> None:
     claim, payment = await claimed()
     original_payment = immutable_payment(payment)
     assert await commercial.handoff(claim)
-    saved = await db.get(CommercialHandoff, claim_id=claim.id)
+    saved = required(await db.get(CommercialHandoff, claim_id=claim.id))
     accepted = deepcopy((saved.payload, saved.receipt, saved.acknowledged_at, saved.attempts))
-    operation = await db.get(CoinOperation, id=claim.id)
+    operation = required(await db.get(CoinOperation, id=claim.id))
     # Loaded objects are deliberately older than durable bytes. No historical
     # payment/operation/receipt is actually rewritten by this fixture.
     set_committed_value(saved, "payload", {"old_snapshot": True})
@@ -131,8 +140,12 @@ async def test_existing_handoff_in_committed_view_replays_without_duplicate_or_r
 
 @pytest.mark.parametrize("coins", [None, 0, 1337])
 async def test_absent_children_and_own_flushed_handoff_preserve_one_component(
-    session, commercial_remote, mocker, committed_children, coins
-):
+    session: AsyncSession,
+    commercial_remote: CommercialResponses,
+    mocker: MockerFixture,
+    committed_children: Callable[[Sequence[type[Base]]], Awaitable[None]],
+    coins: int | None,
+) -> None:
     claim, payment = await claimed(coins)
     payment_before = immutable_payment(payment)
     # The committed reader has no child rows; discovery must still include
@@ -141,7 +154,7 @@ async def test_absent_children_and_own_flushed_handoff_preserve_one_component(
     probes = []
     first = db.first
 
-    async def existing_only(query):
+    async def existing_only(query: Any) -> Any:
         if getattr(query, "_for_update_arg", None) is not None:
             model = query.column_descriptions[0]["entity"]
             if model in {CommercialHandoff, CoinOperation}:
@@ -154,7 +167,7 @@ async def test_absent_children_and_own_flushed_handoff_preserve_one_component(
 
     mocker.patch.object(db, "first", side_effect=existing_only)
     assert await commercial.handoff(claim)
-    saved = await db.get(CommercialHandoff, claim_id=claim.id)
+    saved = required(await db.get(CommercialHandoff, claim_id=claim.id))
     payload = deepcopy(saved.payload)
     assert payload["observation"]["computed_units"] == coins
     assert ("operation_id" in payload) is bool(coins)
@@ -174,19 +187,19 @@ async def test_absent_children_and_own_flushed_handoff_preserve_one_component(
 
 @pytest.mark.parametrize("model", [CommercialHandoff, CoinOperation])
 async def test_confirmed_child_disappearance_fails_without_remote_or_replacement(
-    session, mocker, commercial_remote, model
-):
+    session: AsyncSession, mocker: MockerFixture, commercial_remote: CommercialResponses, model: Any
+) -> None:
     claim, _ = await claimed()
     discover = payment_claims.committed_and_local_keys
 
-    async def confirmed(query):
+    async def confirmed(query: Any) -> Any:
         if query.column_descriptions[0]["entity"] is model:
             return {(claim.id,)}
         return await discover(query)
 
     first = db.first
 
-    async def disappeared(query):
+    async def disappeared(query: Any) -> Any:
         if getattr(query, "_for_update_arg", None) is not None and query.column_descriptions[0]["entity"] is model:
             return None
         return await first(query)
@@ -207,8 +220,13 @@ async def test_confirmed_child_disappearance_fails_without_remote_or_replacement
     ],
 )
 async def test_committed_cancellation_evidence_is_exported_without_rewriting_claim(
-    session, mocker, commercial_remote, committed_children, model, origin
-):
+    session: AsyncSession,
+    mocker: MockerFixture,
+    commercial_remote: CommercialResponses,
+    committed_children: Callable[[Sequence[type[Base]]], Awaitable[None]],
+    model: Any,
+    origin: str,
+) -> None:
     claim, payment = await claimed()
     identity = deepcopy((claim.id, claim.payment_ids, claim.basis, claim.created_at, claim.coins))
     assessment = {"payment_ids": [payment.id], "entitlement": "established", "basis": {"original": "assessment"}}
@@ -228,8 +246,12 @@ async def test_committed_cancellation_evidence_is_exported_without_rewriting_cla
 
 @pytest.mark.parametrize("failure", ["lost", "identity", "disposition"])
 async def test_committed_cancellation_returns_original_result_after_real_finish_failure_and_exact_recovery(
-    session, remote, commercial_remote, mocker, failure
-):
+    session: AsyncSession,
+    remote: dict[str, Any],
+    commercial_remote: CommercialResponses,
+    mocker: MockerFixture,
+    failure: str,
+) -> None:
     event, right, payment = await original(remote)
     grant_id, _, _ = await authorize(mocker, right)
     from api.services import retained_events
@@ -246,20 +268,20 @@ async def test_committed_cancellation_returns_original_result_after_real_finish_
     assert finish.await_count == 1 and rollback.await_count == 1
     assert result["state"] == "applied" and result["financial_satisfaction"] is False
     assert result["payment_id"] == payment_id and result["received_at"] == receipt["received_at"]
-    saved = await db.get(EventCancellation, id=command)
+    saved = required(await db.get(EventCancellation, id=command))
     assert saved.original == receipt and saved.result == result
     assert await db.get(SettlementBatch, id=result["settlement_batch_id"]) is not None
-    assert (await db.get(RetainedEventRight, id=right_id)).state == "cancelled"
-    assert (await db.get(EventRightGrant, id=grant_id)).state == "withdrawn"
+    assert (required(await db.get(RetainedEventRight, id=right_id))).state == "cancelled"
+    assert (required(await db.get(EventRightGrant, id=grant_id))).state == "withdrawn"
     assert await db.all(filter_by(WebinarParticipant, webinar_id=event_id)) == []
     claims = await db.all(select(SettlementClaim))
     assert len(claims) == 1
     claim_id = claims[0].id
-    operation = await db.get(CoinOperation, id=claim_id)
+    operation = required(await db.get(CoinOperation, id=claim_id))
     assert operation.coins == payment_before["paid_coins"] and operation.completed_at is None
     sent = deepcopy(commercial_remote.bodies("register_event"))
     assert len(sent) == 1
-    assert (await db.get(CommercialHandoff, claim_id=claim_id)).acknowledged_at is None
+    assert (required(await db.get(CommercialHandoff, claim_id=claim_id))).acknowledged_at is None
     assert await event_cancellations.receive(USER, command) == result
     assert commercial_remote.bodies("register_event") == sent
     commercial_remote.handoff_failure = None
@@ -270,7 +292,7 @@ async def test_committed_cancellation_returns_original_result_after_real_finish_
     assert commercial_remote.bodies("register_event") == sent * 2
     assert len(await db.all(select(SettlementClaim))) == len(await db.all(select(CoinOperation))) == 1
     assert len(await db.all(select(CommercialHandoff))) == 1
-    assert (await db.get(CommercialHandoff, claim_id=claim_id)).acknowledged_at is not None
-    assert (await db.get(CoinOperation, id=claim_id)).completed_at is None
-    assert immutable_payment(await db.get(BookingPayment, id=payment_id)) == payment_before
-    assert (await db.get(EventCancellation, id=command)).original == receipt
+    assert (required(await db.get(CommercialHandoff, claim_id=claim_id))).acknowledged_at is not None
+    assert (required(await db.get(CoinOperation, id=claim_id))).completed_at is None
+    assert immutable_payment(required(await db.get(BookingPayment, id=payment_id))) == payment_before
+    assert (required(await db.get(EventCancellation, id=command))).original == receipt

@@ -19,6 +19,7 @@ class CancellationDeclaration(BaseModel):
     administration_reason: StrictStr | None = None
 
     @validator("original_text", "administration_reason")
+    @classmethod
     def meaningful_text(cls, value: str | None) -> str | None:
         if value is not None and (not value.strip() or len(value) > 4000):
             raise ValueError("Provide the actual declaration or reason, up to 4000 characters")

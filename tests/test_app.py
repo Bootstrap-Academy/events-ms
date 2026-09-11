@@ -9,6 +9,7 @@ from pytest_mock import MockerFixture
 
 from ._utils import import_module, mock_asynccontextmanager
 from api import app
+from api.database import db
 
 
 def get_decorated_function(
@@ -104,11 +105,11 @@ async def test_confirmation_and_other_cancellation_family_progress_after_failure
     deadlines: list[float] = []
     original_timeout = asyncio.timeout
 
-    def bounded_timeout(seconds: float):
+    def bounded_timeout(seconds: float) -> asyncio.Timeout:
         deadlines.append(seconds)
         return original_timeout(0.01)
 
-    async def cancellation(name: str):
+    async def cancellation(name: str) -> None:
         trace.append(name + ":entered")
         if name != family:
             trace.append(name + ":complete")
@@ -121,20 +122,20 @@ async def test_confirmation_and_other_cancellation_family_progress_after_failure
             trace.append(name + ":released")
             failed_released.set()
 
-    async def confirmation():
+    async def confirmation() -> None:
         trace.append("confirmation:complete")
         confirmation_seen.set()
 
-    async def recover_ordinary():
+    async def recover_ordinary() -> None:
         await cancellation("ordinary")
 
-    async def recover_retained():
+    async def recover_retained() -> None:
         await cancellation("retained")
 
     ordinary = mocker.patch("api.services.ordinary_cancellations.recover", side_effect=recover_ordinary)
     retained = mocker.patch("api.services.event_cancellations.recover", side_effect=recover_retained)
     confirmed = mocker.patch("api.services.booking_contracts.recover", side_effect=confirmation)
-    mocker.patch.object(app.asyncio, "timeout", side_effect=bounded_timeout)
+    mocker.patch.object(asyncio, "timeout", side_effect=bounded_timeout)
     task = asyncio.create_task(app.confirmation_loop())
     try:
         await asyncio.wait_for(confirmation_seen.wait(), 1)
@@ -163,7 +164,7 @@ async def test_confirmation_failure_does_not_starve_either_cancellation_family_i
     ordinary.side_effect = lambda: trace.append("ordinary")
     retained.side_effect = lambda: trace.append("retained")
 
-    async def confirmation():
+    async def confirmation() -> None:
         trace.append("confirmation")
         if trace.count("confirmation") == 1:
             raise OSError("synthetic confirmation failure")
@@ -171,13 +172,13 @@ async def test_confirmation_failure_does_not_starve_either_cancellation_family_i
 
     pauses = []
 
-    async def next_cycle(seconds: float):
+    async def next_cycle(seconds: float) -> None:
         pauses.append(seconds)
         if len(pauses) > 1:
             await asyncio.Event().wait()
 
     mocker.patch("api.services.booking_contracts.recover", side_effect=confirmation)
-    mocker.patch.object(app.asyncio, "sleep", side_effect=next_cycle)
+    mocker.patch.object(asyncio, "sleep", side_effect=next_cycle)
     task = asyncio.create_task(app.confirmation_loop())
     try:
         await asyncio.wait_for(second_confirmation.wait(), 1)
@@ -196,7 +197,7 @@ async def test_actual_shutdown_releases_active_family_and_all_companion_tasks(
     entered, released = asyncio.Event(), asyncio.Event()
     trace: list[str] = []
 
-    async def stage(name: str):
+    async def stage(name: str) -> None:
         trace.append(name)
         if name == active:
             try:
@@ -207,24 +208,24 @@ async def test_actual_shutdown_releases_active_family_and_all_companion_tasks(
 
     # Every background call is an in-process ordinary fixture, including the
     # healthy earlier families. No real service operation or application server.
-    async def ordinary():
+    async def ordinary() -> None:
         await stage("ordinary")
 
-    async def retained():
+    async def retained() -> None:
         await stage("retained")
 
-    async def confirmation():
+    async def confirmation() -> None:
         await stage("confirmation")
 
-    async def pause(seconds):
+    async def pause(seconds: float) -> None:
         assert seconds == 30
         await stage("between_cycles")
 
     mocker.patch("api.services.ordinary_cancellations.recover", side_effect=ordinary)
     mocker.patch("api.services.event_cancellations.recover", side_effect=retained)
     mocker.patch("api.services.booking_contracts.recover", side_effect=confirmation)
-    mocker.patch.object(app.asyncio, "sleep", side_effect=pause)
-    disposed = mocker.patch.object(app.db, "dispose", new_callable=AsyncMock)
+    mocker.patch.object(asyncio, "sleep", side_effect=pause)
+    disposed = mocker.patch.object(db, "dispose", new_callable=AsyncMock)
     confirmation_task = asyncio.create_task(app.confirmation_loop())
     companions = [asyncio.create_task(asyncio.Event().wait()) for _ in range(2)]
     mocker.patch.object(app.app.state, "cleanup_task", companions[0], create=True)

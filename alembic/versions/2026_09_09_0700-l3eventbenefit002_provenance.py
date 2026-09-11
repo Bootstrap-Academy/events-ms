@@ -1,6 +1,9 @@
 """Explicit prospective XP producer provenance; old state is never presumed unpaid."""
+
 from alembic import op
+
 import sqlalchemy as sa
+
 
 revision = "l3eventbenefit002"
 down_revision = "l3eventbenefit001"

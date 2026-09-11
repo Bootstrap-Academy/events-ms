@@ -1,7 +1,9 @@
 """Explicit cancellation receipts and additive original-claim evidence; no inference/backfill."""
 
 from alembic import op
+
 import sqlalchemy as sa
+
 
 revision = "l3eventcancel001"
 down_revision = "l3eventbook001"
@@ -9,7 +11,7 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade():
+def upgrade() -> None:
     op.create_table(
         "events_cancellation_declarations",
         sa.Column("id", sa.String(36), primary_key=True),
@@ -31,5 +33,5 @@ def upgrade():
     )
 
 
-def downgrade():
+def downgrade() -> None:
     raise RuntimeError("Preserve original cancellation receipts and claim evidence until reviewed disposition")

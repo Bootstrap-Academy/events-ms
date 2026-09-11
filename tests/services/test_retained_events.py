@@ -1,11 +1,14 @@
 """Actual local erasure/cleanup transactions; remote canonical receipts are fixtures."""
 
 from datetime import timedelta
+from typing import Any, Literal, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from pytest_mock import MockerFixture
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import db, select
 from api.models import (
@@ -17,16 +20,18 @@ from api.models import (
     Webinar,
     WebinarParticipant,
 )
+from api.models.booking_payment import CommercialErasureReceipt
 from api.models.webinars import clean_old_webinars
 from api.services import commercial, retained_events
 from api.services.user_deletion import delete_user_data
 from api.services.user_export import export_user_data
 from api.utils.utc import utcnow
 from tests.payment_fixtures import paid_participant
+from tests.required import required, unwrapped
 from tests.services.test_user_deletion import OTHER, THIRD, USER, _slot, _webinar, _weekly_slot
 
 
-def canonical(subject, *, declaration=None):
+def canonical(subject: str, *, declaration: Any = None) -> dict[str, Any]:
     return {
         "protocol": 1,
         "subject": subject,
@@ -41,10 +46,10 @@ def canonical(subject, *, declaration=None):
 
 
 @pytest.fixture
-def remote(mocker):
-    receipts = {}
+def remote(mocker: MockerFixture) -> dict[str, Any]:
+    receipts: dict[str, Any] = {}
 
-    async def call(operation, payload):
+    async def call(operation: str, payload: dict[str, Any]) -> Any:
         if operation == "erasure":
             return receipts.get(payload["subject"])
         if operation == "inventory":
@@ -57,7 +62,7 @@ def remote(mocker):
     return receipts
 
 
-async def booking(student=USER, provider=OTHER, days=9):
+async def booking(student: str = USER, provider: str = OTHER, days: int = 9) -> tuple[Webinar, WebinarParticipant]:
     event = _webinar(str(uuid4()), provider)
     event.start = utcnow() + timedelta(days=days)
     event.end = event.start + timedelta(hours=1)
@@ -67,7 +72,7 @@ async def booking(student=USER, provider=OTHER, days=9):
     return event, booked
 
 
-async def test_data_erasure_preserves_booking_and_owner_evidence(session, remote):
+async def test_data_erasure_preserves_booking_and_owner_evidence(session: AsyncSession, remote: dict[str, Any]) -> None:
     event, booked = await booking()
     receipt = canonical(USER)
     remote[USER] = receipt
@@ -92,10 +97,12 @@ async def test_data_erasure_preserves_booking_and_owner_evidence(session, remote
     await delete_user_data(USER)
     assert len(await db.all(select(RetainedEventRight))) == 1
     assert len(await db.all(select(RetainedEventErasure))) == 1
-    assert (await db.get(commercial.CommercialErasureReceipt, subject=USER)).canonical == receipt
+    assert (required(await db.get(CommercialErasureReceipt, subject=USER))).canonical == receipt
 
 
-async def test_provider_erasure_preserves_capacity_and_detaches_recurring_rules(session, remote):
+async def test_provider_erasure_preserves_capacity_and_detaches_recurring_rules(
+    session: AsyncSession, remote: dict[str, Any]
+) -> None:
     event, booked = await booking(student=OTHER, provider=USER)
     weekly = _weekly_slot(str(uuid4()), USER)
     await db.add(weekly)
@@ -103,9 +110,9 @@ async def test_provider_erasure_preserves_capacity_and_detaches_recurring_rules(
     await db.add(slot)
     remote[USER] = canonical(USER)
     await delete_user_data(USER)
-    assert (await db.get(Webinar, id=event.id)).closed_to_new_bookings is True
+    assert (required(await db.get(Webinar, id=event.id))).closed_to_new_bookings is True
     assert await db.get(WebinarParticipant, webinar_id=event.id, user_id=OTHER) is not None
-    current = await db.get(Slot, id=slot.id)
+    current = required(await db.get(Slot, id=slot.id))
     assert current.booked_by == OTHER and current.weekly_slot_id is None
     assert await db.get(type(weekly), id=weekly.id) is None
     assert len(await db.all(select(RetainedEventRight))) == 2
@@ -113,7 +120,9 @@ async def test_provider_erasure_preserves_capacity_and_detaches_recurring_rules(
 
 
 @pytest.mark.parametrize("provider_cancel", [False, True])
-async def test_identified_cancellation_uses_original_declaration_time(session, remote, provider_cancel):
+async def test_identified_cancellation_uses_original_declaration_time(
+    session: AsyncSession, remote: dict[str, Any], provider_cancel: bool
+) -> None:
     event, booked = await booking(
         student=OTHER if provider_cancel else USER, provider=USER if provider_cancel else OTHER
     )
@@ -136,11 +145,13 @@ async def test_identified_cancellation_uses_original_declaration_time(session, r
     assert await db.all(select(RetainedEventRight)) == []
 
 
-async def test_cleanup_before_data_erasure_preserves_unknown_performance(session, remote, mocker):
+async def test_cleanup_before_data_erasure_preserves_unknown_performance(
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture
+) -> None:
     event, booked = await booking(days=-1)
     remote[USER] = canonical(USER)
     remote[USER]["request"]["received_at"] = (event.start - timedelta(days=8)).isoformat()
-    await clean_old_webinars.__wrapped__()
+    await unwrapped(clean_old_webinars)()
     assert await db.get(Webinar, id=event.id) is None
     rights = await db.all(select(RetainedEventRight))
     assert len(rights) == 1 and rights[0].state == "resolution_pending"
@@ -156,11 +167,13 @@ async def test_cleanup_before_data_erasure_preserves_unknown_performance(session
     assert len(await db.all(select(RetainedEventErasure))) == 1
 
 
-async def test_old_erasure_does_not_withdraw_current_successor_observation(session, remote):
+async def test_old_erasure_does_not_withdraw_current_successor_observation(
+    session: AsyncSession, remote: dict[str, Any]
+) -> None:
     event, booked = await booking()
     remote[USER] = canonical(USER)
     await delete_user_data(USER)
-    right = await db.first(select(RetainedEventRight))
+    right: RetainedEventRight = required(cast(RetainedEventRight | None, await db.first(select(RetainedEventRight))))
     # Explicit fixture of a delivered successor; this does not certify the pending adapter.
     right.current_subject = THIRD
     right.state = "active"
@@ -170,18 +183,22 @@ async def test_old_erasure_does_not_withdraw_current_successor_observation(sessi
     assert len(await db.all(select(RetainedEventErasure))) == 1
 
 
-async def test_unknown_original_receipt_preserves_right_without_false_acknowledgment(session, remote):
+async def test_unknown_original_receipt_preserves_right_without_false_acknowledgment(
+    session: AsyncSession, remote: dict[str, Any]
+) -> None:
     event, booked = await booking()
     with pytest.raises(HTTPException) as failure:
         await delete_user_data(USER)
     assert failure.value.status_code == 503
     assert await db.get(WebinarParticipant, webinar_id=event.id, user_id=USER) is not None
-    receipt = await db.get(commercial.CommercialErasureReceipt, subject=USER)
+    receipt = required(await db.get(CommercialErasureReceipt, subject=USER))
     assert receipt.canonical is None and receipt.erased_at is not None and receipt.acknowledged_at is None
     assert await db.all(select(SettlementClaim)) == []
 
 
-async def test_delayed_cleanup_preserves_actual_earlier_cancellation(session, remote, mocker):
+async def test_delayed_cleanup_preserves_actual_earlier_cancellation(
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture
+) -> None:
     event, booked = await booking(days=-1)
     declared = event.start - timedelta(days=8)
     remote[USER] = canonical(
@@ -193,7 +210,7 @@ async def test_delayed_cleanup_preserves_actual_earlier_cancellation(session, re
             "received_at": declared.isoformat(),
         },
     )
-    await clean_old_webinars.__wrapped__()
+    await unwrapped(clean_old_webinars)()
     claims = await db.all(select(SettlementClaim))
     assert len(claims) == 1 and claims[0].user_id == USER and claims[0].entitlement == "established"
     assert claims[0].coins == 1337 and claims[0].basis["request_received_at"] == declared.isoformat()
@@ -201,19 +218,21 @@ async def test_delayed_cleanup_preserves_actual_earlier_cancellation(session, re
     assert len(await db.all(select(SettlementClaim))) == 1
 
 
-async def test_cleanup_queries_current_recipient_and_keeps_original_financial_owner(session, remote):
+async def test_cleanup_queries_current_recipient_and_keeps_original_financial_owner(
+    session: AsyncSession, remote: dict[str, Any]
+) -> None:
     event, booked = await booking()
     remote[USER] = canonical(USER)
     await delete_user_data(USER)
-    right = await db.first(select(RetainedEventRight))
+    right: RetainedEventRight = required(cast(RetainedEventRight | None, await db.first(select(RetainedEventRight))))
     right.current_subject = THIRD
     right.state = "active"
     await db.commit()
     from api.models import BookingPayment
     from api.services import settlements
 
-    batch = await settlements.new_batch("payout")
-    payment = await db.get(BookingPayment, id=booked.payment_id)
+    batch = required(await settlements.new_batch("payout"))
+    payment = required(await db.get(BookingPayment, id=booked.payment_id))
     assert await commercial.cleanup_claims(payment, event, OTHER, batch.id) is False
     assert payment.user_id == USER and right.current_subject == THIRD
     assert await db.all(select(SettlementClaim)) == []
@@ -221,10 +240,17 @@ async def test_cleanup_queries_current_recipient_and_keeps_original_financial_ow
 
 @pytest.mark.parametrize("kind", ["webinar", "coaching"])
 @pytest.mark.parametrize("path", ["direct", "cleanup", "detached"])
-async def test_provider_cancellation_exactly_at_start_has_same_return(session, remote, mocker, kind, path):
+async def test_provider_cancellation_exactly_at_start_has_same_return(
+    session: AsyncSession,
+    remote: dict[str, Any],
+    mocker: MockerFixture,
+    kind: Literal["webinar", "coaching"],
+    path: str,
+) -> None:
     from api.models import BookingPayment
     from api.models.slots import clean_old_slots
 
+    event: Webinar | Slot
     if kind == "webinar":
         event, booked = await booking(student=OTHER, provider=USER, days=-1)
         payment_id = booked.payment_id
@@ -234,7 +260,7 @@ async def test_provider_cancellation_exactly_at_start_has_same_return(session, r
         event.end = event.start + timedelta(hours=1)
         await db.add(event)
         payment_id = event.payment_id
-    payment = await db.get(BookingPayment, id=payment_id)
+    payment = required(await db.get(BookingPayment, id=payment_id))
     declared = event.start
     remote[USER] = canonical(
         USER,
@@ -250,7 +276,7 @@ async def test_provider_cancellation_exactly_at_start_has_same_return(session, r
         await db.delete(event)
         await db.session.flush()
     if path == "cleanup":
-        await (clean_old_webinars.__wrapped__() if kind == "webinar" else clean_old_slots.__wrapped__())
+        await (unwrapped(clean_old_webinars)() if kind == "webinar" else unwrapped(clean_old_slots)())
     else:
         await delete_user_data(USER)
     claims = await db.all(select(SettlementClaim))
@@ -270,5 +296,5 @@ async def test_provider_cancellation_exactly_at_start_has_same_return(session, r
         {"request": {"evidence": {"declaration": {"contract_ids": "x"}}}},
     ],
 )
-def test_erasure_without_actual_declaration_never_implies_cancellation(malformed):
+def test_erasure_without_actual_declaration_never_implies_cancellation(malformed: Any) -> None:
     assert retained_events.cancellation_declaration(malformed, "x") is None

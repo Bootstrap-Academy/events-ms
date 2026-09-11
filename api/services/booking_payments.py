@@ -115,7 +115,8 @@ async def deliver(payment_id: str) -> str:
         payment.paid_coins = payment.quoted_coins if result == "paid" else 0
         payment.payout_coins = share(payment.paid_coins, payment.payout_ratio)
         if contract is not None and result == "paid":
-            assert contract.outcome is not None
+            if not (contract.outcome is not None):
+                raise AssertionError("Required original evidence is unavailable or mismatched")
         payment.evidence = {
             "kind": (
                 ("purchase_contract" if contract is not None else "keyed_debit")

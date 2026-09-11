@@ -55,7 +55,8 @@ async def ledger(mocker: Any) -> Any:
     mocker.patch("api.models.LecturerRating.get_rating", AsyncMock(return_value=None))
     conn = await asyncpg.connect(os.environ["T6_BACKEND_DB"])
     await conn.execute(
-        "INSERT INTO coins(user_id,coins,withheld_coins) VALUES($1,100000,0) ON CONFLICT(user_id) DO UPDATE SET coins=100000",
+        "INSERT INTO coins(user_id,coins,withheld_coins) VALUES($1,100000,0) "
+        "ON CONFLICT(user_id) DO UPDATE SET coins=100000",
         UUID(FOO),
     )
     yield conn
@@ -254,12 +255,14 @@ async def test_committed_availability_deadline(ledger: Any, mocker: Any, boundar
         async with db.engine.begin() as conn:
             await conn.execute(
                 text(
-                    f"CREATE FUNCTION l1_delay_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF {condition} THEN PERFORM pg_sleep(6); END IF; RETURN NEW; END $$"
+                    "CREATE FUNCTION l1_delay_commit() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                    f"BEGIN IF {condition} THEN PERFORM pg_sleep(6); END IF; RETURN NEW; END $$"
                 )
             )
             await conn.execute(
                 text(
-                    f"CREATE CONSTRAINT TRIGGER l1_delay_commit AFTER {operation} ON {table} DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION l1_delay_commit()"
+                    f"CREATE CONSTRAINT TRIGGER l1_delay_commit AFTER {operation} ON {table} "
+                    "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION l1_delay_commit()"
                 )
             )
     elif boundary == "missing_witness":

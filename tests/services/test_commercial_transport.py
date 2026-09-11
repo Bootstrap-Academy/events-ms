@@ -8,12 +8,15 @@ import json
 from copy import deepcopy
 from datetime import timedelta, timezone
 from types import SimpleNamespace
+from typing import Any, Iterator
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 from httpx import AsyncClient, HTTPStatusError, MockTransport, ReadTimeout, Request, Response
+from pytest_mock import MockerFixture
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import db, db_context, filter_by, select
 from api.models import BookingPayment, RetainedEventRight, SettlementClaim, Webinar, WebinarParticipant
@@ -23,28 +26,30 @@ from api.services import event_cancellations, retained_events, shop
 from api.services.internal import InternalService, InternalServiceError
 from api.utils.utc import utcnow
 from tests.payment_fixtures import paid_participant
+from tests.required import required
 from tests.services.test_retained_events import booking, canonical
 from tests.services.test_user_deletion import OTHER, THIRD, USER
 
 
-def json_response(value):
+def json_response(value: Any) -> Response:
     # httpx Response(json=None) means no body, not the JSON null receipt.
     return Response(200, content=json.dumps(value), headers={"Content-Type": "application/json"})
 
 
 @pytest.fixture
-def backend_http(mocker):
-    requests, clients = [], []
+def backend_http(mocker: MockerFixture) -> Iterator[SimpleNamespace]:
+    requests: list[Request] = []
+    clients: list[AsyncClient] = []
     stub = SimpleNamespace(reply=lambda request: json_response(None), requests=requests, clients=clients)
     # The local test environment has no service URL configured. Supply a
     # synthetic setting while exercising the real client's internal path join.
     mocker.patch.object(InternalService.SHOP, "_value_", "http://shop.synthetic.test/shop")
 
-    async def handle(request):
+    async def handle(request: Any) -> Any:
         requests.append(request)
         return stub.reply(request)
 
-    def client(*args, **kwargs):
+    def client(*args: Any, **kwargs: Any) -> Any:
         # Keep the actual property's URL, headers and response hooks. Substitute
         # only its HTTP transport and a synthetic token, never shop.commercial.
         assert "transport" not in kwargs
@@ -57,6 +62,9 @@ def backend_http(mocker):
     yield stub
     assert all(client.is_closed for client in clients)
 
+
+INVALID_OBJECTS: list[Any] = [None, {}, True, 3, "unknown"]
+INVALID_OUTCOMES: list[Any] = [None, [], False, 3, "unknown"]
 
 OBJECT_OR_NULL = ["erasure", "register_event", "inventory", "event_cancellation_authority"]
 
@@ -71,8 +79,8 @@ OBJECT_OR_NULL = ["erasure", "register_event", "inventory", "event_cancellation_
     ],
 )
 async def test_actual_wrapper_preserves_operation_specific_containers_and_internal_request(
-    backend_http, operation, reply
-):
+    backend_http: SimpleNamespace, operation: str, reply: Any
+) -> None:
     body = {"source_subject": USER, "command_id": str(uuid4())}
     backend_http.reply = lambda request: json_response(reply)
     assert await shop.commercial(operation, body) == reply
@@ -89,10 +97,12 @@ async def test_actual_wrapper_preserves_operation_specific_containers_and_intern
 @pytest.mark.parametrize(
     "operation,reply",
     [(operation, value) for operation in OBJECT_OR_NULL for value in [[], True, 3, "unknown"]]
-    + [("event_cancellation_pending", value) for value in [None, {}, True, 3, "unknown"]]
-    + [("event_cancellation_outcome", value) for value in [None, [], False, 3, "unknown"]],
+    + [("event_cancellation_pending", value) for value in INVALID_OBJECTS]
+    + [("event_cancellation_outcome", value) for value in INVALID_OUTCOMES],
 )
-async def test_wrong_container_never_becomes_an_empty_inventory_or_success(backend_http, operation, reply):
+async def test_wrong_container_never_becomes_an_empty_inventory_or_success(
+    backend_http: SimpleNamespace, operation: str, reply: Any
+) -> None:
     backend_http.reply = lambda request: json_response(reply)
     with pytest.raises(ValueError, match="Malformed"):
         await shop.commercial(operation, {})
@@ -100,7 +110,9 @@ async def test_wrong_container_never_becomes_an_empty_inventory_or_success(backe
 
 
 @pytest.mark.parametrize("operation", ["event_cancel", "event_rights", "unknown"])
-async def test_public_or_unknown_operations_are_rejected_before_client_construction(backend_http, operation):
+async def test_public_or_unknown_operations_are_rejected_before_client_construction(
+    backend_http: SimpleNamespace, operation: str
+) -> None:
     with pytest.raises(ValueError, match="Unsupported commercial operation"):
         await shop.commercial(operation, {})
     backend_http.constructor.assert_not_called()
@@ -108,7 +120,9 @@ async def test_public_or_unknown_operations_are_rejected_before_client_construct
 
 
 @pytest.mark.parametrize("status", [401, 403, 404, 409, 422, 500, 503])
-async def test_real_internal_error_hooks_and_http_status_errors_propagate_without_fallback(backend_http, status):
+async def test_real_internal_error_hooks_and_http_status_errors_propagate_without_fallback(
+    backend_http: SimpleNamespace, status: int
+) -> None:
     backend_http.reply = lambda request: Response(status, json={"detail": "synthetic unavailable"})
     expected = InternalServiceError if status in [401, 403, 500, 503] else HTTPStatusError
     with pytest.raises(expected):
@@ -118,8 +132,10 @@ async def test_real_internal_error_hooks_and_http_status_errors_propagate_withou
 
 
 @pytest.mark.parametrize("failure", ["invalid_json", "empty_body", "read_timeout"])
-async def test_invalid_json_or_lost_reply_propagates_without_another_request(backend_http, failure):
-    def reply(request):
+async def test_invalid_json_or_lost_reply_propagates_without_another_request(
+    backend_http: SimpleNamespace, failure: str
+) -> None:
+    def reply(request: Any) -> Any:
         if failure == "read_timeout":
             raise ReadTimeout("synthetic reply loss", request=request)
         return Response(200, content=b"" if failure == "empty_body" else b"{invalid-json")
@@ -130,16 +146,16 @@ async def test_invalid_json_or_lost_reply_propagates_without_another_request(bac
     assert len(backend_http.requests) == 1
 
 
-async def preserved_booking():
+async def preserved_booking() -> SimpleNamespace:
     event, seat = await booking()
-    payment = await db.get(BookingPayment, id=seat.payment_id)
+    payment = required(await db.get(BookingPayment, id=seat.payment_id))
     payment.original = {"commercial_event": {"instructor_id": OTHER}}
     await retained_events.lock_subject(USER)
     await db.first(filter_by(Webinar, id=event.id).with_for_update())
     await retained_events.preserve_on_erasure(
         USER, SimpleNamespace(canonical=canonical(USER), observed_at=utcnow()), payment, event, "participant"
     )
-    right = await retained_events.right_for(payment.id, "participant")
+    right = required(await retained_events.right_for(payment.id, "participant"))
     await db.commit()
     command = str(uuid4())
     instant = utcnow().replace(microsecond=654321).astimezone(timezone(timedelta(hours=2)))
@@ -172,9 +188,9 @@ async def preserved_booking():
 
 
 async def test_actual_intake_wrapper_preserves_original_receipt_and_replays_before_new_booking_selection(
-    session, backend_http, mocker
-):
-    original = await preserved_booking()
+    session: AsyncSession, backend_http: SimpleNamespace, mocker: MockerFixture
+) -> None:
+    original = required(await preserved_booking())
     mocker.patch("api.services.settlements.finish", new_callable=AsyncMock)
     backend_http.reply = lambda request: json_response(original.receipt)
     first = await event_cancellations.receive(USER, original.command)
@@ -187,21 +203,23 @@ async def test_actual_intake_wrapper_preserves_original_receipt_and_replays_befo
     await db.commit()
     assert await event_cancellations.receive(USER, original.command) == first
     assert len(backend_http.requests) == 1
-    assert (await db.get(WebinarParticipant, payment_id=replacement.payment_id)).user_id == USER
-    assert (await db.get(EventCancellation, id=original.command)).original == original.receipt
+    assert (required(await db.get(WebinarParticipant, payment_id=replacement.payment_id))).user_id == USER
+    assert (required(await db.get(EventCancellation, id=original.command))).original == original.receipt
     [claim] = await db.all(select(SettlementClaim))
     assert claim.user_id == USER and claim.payment_ids == [original.payment_id] and claim.coins == 1337
     assert len(await db.all(select(EventCancellationClaimEvidence))) == 1
     [operation] = await db.all(select(CoinOperation))
     assert operation.id == claim.id and operation.completed_at is None
-    payment = await db.get(BookingPayment, id=original.payment_id)
+    payment = required(await db.get(BookingPayment, id=original.payment_id))
     assert payment.user_id == USER and payment.original == original.payment_original
     assert payment.evidence == original.payment_evidence and payment.paid_coins == 1337
 
 
 @pytest.mark.parametrize("invalid", ["null", "owner", "right", "origin", "command"])
-async def test_unavailable_or_mismatched_authority_creates_no_local_declaration(session, backend_http, invalid):
-    original = await preserved_booking()
+async def test_unavailable_or_mismatched_authority_creates_no_local_declaration(
+    session: AsyncSession, backend_http: SimpleNamespace, invalid: Any
+) -> None:
+    original = required(await preserved_booking())
     authority = deepcopy(original.receipt)
     if invalid == "null":
         authority = None
@@ -219,26 +237,30 @@ async def test_unavailable_or_mismatched_authority_creates_no_local_declaration(
     assert error.value.status_code == 503
     assert await db.all(select(EventCancellation)) == []
     assert await db.all(select(SettlementClaim)) == []
-    assert (await db.get(RetainedEventRight, id=original.right_id)).state == "preserved"
-    assert (await db.get(WebinarParticipant, payment_id=original.payment_id)).user_id == USER
+    assert (required(await db.get(RetainedEventRight, id=original.right_id))).state == "preserved"
+    assert (required(await db.get(WebinarParticipant, payment_id=original.payment_id))).user_id == USER
     assert len(backend_http.requests) == 1
 
 
-async def test_first_receipt_survives_application_failure_after_actual_authority_http(session, backend_http, mocker):
-    original = await preserved_booking()
+async def test_first_receipt_survives_application_failure_after_actual_authority_http(
+    session: AsyncSession, backend_http: SimpleNamespace, mocker: MockerFixture
+) -> None:
+    original = required(await preserved_booking())
     backend_http.reply = lambda request: json_response(original.receipt)
     mocker.patch.object(event_cancellations, "process", side_effect=RuntimeError("synthetic apply failure"))
     with pytest.raises(RuntimeError, match="synthetic apply failure"):
         await event_cancellations.receive(USER, original.command)
     await db.session.rollback()
-    saved = await db.get(EventCancellation, id=original.command)
+    saved = required(await db.get(EventCancellation, id=original.command))
     assert saved.original == original.receipt and saved.result is None
     assert await db.all(select(SettlementClaim)) == []
     assert len(backend_http.requests) == 1
 
 
 @pytest.mark.parametrize("inventory", [[], None])
-async def test_empty_recovery_is_valid_but_null_inventory_is_failure(backend_http, inventory):
+async def test_empty_recovery_is_valid_but_null_inventory_is_failure(
+    backend_http: SimpleNamespace, inventory: Any
+) -> None:
     backend_http.reply = lambda request: json_response(inventory)
     if inventory is None:
         with pytest.raises(ValueError, match="Malformed cancellation inventory"):
@@ -250,18 +272,18 @@ async def test_empty_recovery_is_valid_but_null_inventory_is_failure(backend_htt
 
 
 async def test_recovery_skips_bad_locator_and_replays_exact_commit_after_lost_outcome_response(
-    session, backend_http, mocker
-):
-    original = await preserved_booking()
+    session: AsyncSession, backend_http: SimpleNamespace, mocker: MockerFixture
+) -> None:
+    original = required(await preserved_booking())
     mocker.patch("api.services.settlements.finish", new_callable=AsyncMock)
     pending = [
         {"source_subject": "malformed"},
         {"source_subject": USER, "command_id": original.command, "right_id": original.right_id},
     ]
-    observations = []
+    observations: list[Any] = []
     lose_first_final = True
 
-    def reply(request: Request):
+    def reply(request: Request) -> Any:
         nonlocal lose_first_final
         operation = request.url.path.rsplit("/", 1)[-1]
         body = json.loads(request.content)
@@ -290,8 +312,8 @@ async def test_recovery_skips_bad_locator_and_replays_exact_commit_after_lost_ou
     backend_http.reply = reply
     await event_cancellations.recover()
     async with db_context():
-        saved = await db.get(EventCancellation, id=original.command)
-        first = deepcopy(saved.result)
+        saved = required(await db.get(EventCancellation, id=original.command))
+        first = deepcopy(required(saved.result))
         assert saved.original == original.receipt and first["state"] == "applied"
         [claim] = await db.all(select(SettlementClaim))
         claim_id = claim.id
@@ -323,7 +345,7 @@ async def test_recovery_skips_bad_locator_and_replays_exact_commit_after_lost_ou
         [operation] = await db.all(select(CoinOperation))
         assert operation.id == claim_id and operation.completed_at is None
         assert len(await db.all(select(EventCancellationClaimEvidence))) == 1
-        assert (await db.get(WebinarParticipant, payment_id=replacement_id)).user_id == USER
-        payment = await db.get(BookingPayment, id=original.payment_id)
+        assert (required(await db.get(WebinarParticipant, payment_id=replacement_id))).user_id == USER
+        payment = required(await db.get(BookingPayment, id=original.payment_id))
         assert payment.user_id == USER and payment.original == original.payment_original
         assert payment.evidence == original.payment_evidence and payment.paid_coins == 1337

@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
-from api.database import db, db_wrapper, filter_by, select
+from api.database import db, db_wrapper, select
 from api.logger import get_logger
 from api.models.booking_payment import SettlementClaim
 from api.models.settlement import CoinOperation, SettlementBatch

@@ -61,7 +61,13 @@ async def product(kind: str, event: Any, skill_id: str | None = None) -> dict[st
         "duration_minutes": int((event.end - event.start).total_seconds()) // 60,
     }
     title = event.name if kind == "webinar" else f"Coaching: {skill_id}"
-    description = f"{event.description if kind == 'webinar' else 'Einzel-Coaching'}\nDurchführung: {instructor.display_name}.\nBeginn: {facts['start']}; Ende: {facts['end']} (UTC).\nAnbieter und Vertragspartner: bootstrap academy GmbH. Die Zugangsdaten werden nach Vertragsbestätigung bereitgestellt."
+    description = (
+        f"{event.description if kind == 'webinar' else 'Einzel-Coaching'}\n"
+        f"Durchführung: {instructor.display_name}.\n"
+        f"Beginn: {facts['start']}; Ende: {facts['end']} (UTC).\n"
+        "Anbieter und Vertragspartner: bootstrap academy GmbH. "
+        "Die Zugangsdaten werden nach Vertragsbestätigung bereitgestellt."
+    )
     commercial = {
         "kind": kind,
         "reference": event.id,

@@ -1,5 +1,7 @@
 """Internal endpoints related to users."""
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from starlette.responses import Response
 
@@ -13,7 +15,7 @@ router = APIRouter()
 
 
 @router.post("/users/{user_id}/event-rights/{operation}")
-async def event_rights(user_id: str, operation: str, body: dict) -> dict | list:
+async def event_rights(user_id: str, operation: str, body: dict[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
     from fastapi import HTTPException
 
     from api.services import retained_events

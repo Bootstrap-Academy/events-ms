@@ -1,27 +1,37 @@
 """Prospective owning cleanup/outbox transactions; committed destination is a stub."""
 
 from datetime import timedelta
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from typing import Any, Literal
 from uuid import uuid4
 
 import httpx
 import pytest
+from pytest_mock import MockerFixture
 from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import db, db_context, filter_by, select
-from api.models import EventBenefit, EventBenefitObservation, Webinar, WebinarParticipant
+from api.models import EventBenefit, EventBenefitObservation, Slot, Webinar
 from api.models.webinars import clean_old_webinars
 from api.services import benefits, skills
 from api.services.internal import InternalService
 from api.services.user_export import export_user_data
 from api.utils.utc import utcnow
 from tests.payment_fixtures import paid_participant
-from tests.services.test_retained_events import booking, remote
+from tests.required import required, unwrapped
+from tests.services import test_retained_events
+from tests.services.test_retained_events import booking
 from tests.services.test_user_deletion import OTHER, THIRD, USER, _slot
 
 
-async def qualify(remote, mocker, *, kind="webinar", two=False):
+async def qualify(
+    remote: dict[str, Any],
+    mocker: MockerFixture,
+    *,
+    kind: Literal["webinar", "coaching"] = "webinar",
+    two: bool = False,
+) -> Webinar | Slot:
+    event: Webinar | Slot
     if kind == "webinar":
         event, booked = await booking(days=-1)
         if two:
@@ -32,7 +42,7 @@ async def qualify(remote, mocker, *, kind="webinar", two=False):
 
         for payment in await db.all(filter_by(BookingPayment, event_id=event.id)):
             payment.xp_delivery_protocol = 1
-        await clean_old_webinars.__wrapped__()
+        await unwrapped(clean_old_webinars)()
     else:
         from api.models.slots import clean_old_slots
 
@@ -42,16 +52,18 @@ async def qualify(remote, mocker, *, kind="webinar", two=False):
         await db.add(event)
         from api.models import BookingPayment
 
-        (await db.get(BookingPayment, id=event.payment_id)).xp_delivery_protocol = 1
-        await clean_old_slots.__wrapped__()
+        (required(await db.get(BookingPayment, id=event.payment_id))).xp_delivery_protocol = 1
+        await unwrapped(clean_old_slots)()
     return event
 
 
 @pytest.mark.parametrize("kind", ["webinar", "coaching"])
-async def test_cleanup_and_exact_configured_earnings_commit_together(session, remote, mocker, kind):
+async def test_cleanup_and_exact_configured_earnings_commit_together(
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture, kind: Literal["webinar", "coaching"]
+) -> None:
     from api.settings import settings
 
-    event = await qualify(remote, mocker, kind=kind, two=kind == "webinar")
+    await qualify(remote, mocker, kind=kind, two=kind == "webinar")
     await db.commit()
     rows = await db.all(select(EventBenefit))
     assert len(rows) == (3 if kind == "webinar" else 2)
@@ -66,33 +78,37 @@ async def test_cleanup_and_exact_configured_earnings_commit_together(session, re
     assert len((await export_user_data(OTHER)).event_benefits["earnings"]) == 1
 
 
-async def test_cleanup_rollback_does_not_create_earning_or_dispatch(session, remote, mocker):
+async def test_cleanup_rollback_does_not_create_earning_or_dispatch(
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture
+) -> None:
     event, _ = await booking(days=-1)
     event_id = event.id
     await db.commit()
     actual = db.delete
 
-    async def fail_parent(row):
+    async def fail_parent(row: Any) -> Any:
         if isinstance(row, Webinar):
             raise RuntimeError("Synthetic producer transaction failure")
         return await actual(row)
 
     mocker.patch.object(db, "delete", side_effect=fail_parent)
     with pytest.raises(RuntimeError):
-        await clean_old_webinars.__wrapped__()
+        await unwrapped(clean_old_webinars)()
     await db.session.rollback()
     assert await db.all(select(EventBenefit)) == [] and await db.get(Webinar, id=event_id) is not None
 
 
-async def test_retry_freezes_identity_and_config_and_reply_loss_cannot_duplicate_effect(session, remote, mocker):
-    event = await qualify(remote, mocker)
+async def test_retry_freezes_identity_and_config_and_reply_loss_cannot_duplicate_effect(
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture
+) -> None:
+    await qualify(remote, mocker)
     await db.commit()
     rows = await db.all(select(EventBenefit))
     original = {r.id: dict(r.request) for r in rows}
-    effects = {}
+    effects: dict[str, Any] = {}
     lost = set()
 
-    async def destination(operation, request):
+    async def destination(operation: str, request: Any) -> Any:
         if operation in effects:
             assert effects[operation] == request
         else:
@@ -120,12 +136,14 @@ async def test_retry_freezes_identity_and_config_and_reply_loss_cannot_duplicate
         assert await benefits.export(USER) == before
 
 
-async def test_acknowledgment_rollback_retries_exact_already_committed_remote_effect(session, remote, mocker):
+async def test_acknowledgment_rollback_retries_exact_already_committed_remote_effect(
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture
+) -> None:
     await qualify(remote, mocker)
     await db.commit()
-    effects = {}
+    effects: dict[str, Any] = {}
 
-    async def destination(operation, request):
+    async def destination(operation: str, request: Any) -> Any:
         effects.setdefault(operation, dict(request))
         assert effects[operation] == request
         return {"operation_id": operation, "request": request, "state": "applied", "applied": True}
@@ -134,7 +152,7 @@ async def test_acknowledgment_rollback_retries_exact_already_committed_remote_ef
     actual = db.commit
     first = True
 
-    async def fail_once():
+    async def fail_once() -> None:
         nonlocal first
         if first:
             first = False
@@ -153,19 +171,21 @@ async def test_acknowledgment_rollback_retries_exact_already_committed_remote_ef
     assert len(effects) == 1
 
 
-async def test_repeated_earning_keeps_first_beneficiary_and_amount(session, remote, mocker):
+async def test_repeated_earning_keeps_first_beneficiary_and_amount(
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture
+) -> None:
     event, booked = await booking()
     from api.models import BookingPayment
     from api.services import commercial
 
-    payment = await db.get(BookingPayment, id=booked.payment_id)
+    payment = required(await db.get(BookingPayment, id=booked.payment_id))
     await commercial.retain_event(payment, event, OTHER)
     first = await benefits.record(event, payment, "participant", USER, 17)
     await db.commit()
-    original = dict((await db.get(EventBenefit, id=first)).request)
+    original = dict((required(await db.get(EventBenefit, id=first))).request)
     assert await benefits.record(event, payment, "participant", THIRD, 999) == first
     await db.commit()
-    row = await db.get(EventBenefit, id=first)
+    row = required(await db.get(EventBenefit, id=first))
     assert row.request == original and row.user_id == USER
 
 
@@ -173,10 +193,10 @@ async def test_repeated_earning_keeps_first_beneficiary_and_amount(session, remo
     "response_kind",
     ["applied", "erased", "404", "422", "503", "conflict", "wrong_operation", "wrong_subject", "bool_xp", "malformed"],
 )
-async def test_transport_requires_exact_typed_receipt(mocker, response_kind):
+async def test_transport_requires_exact_typed_receipt(mocker: MockerFixture, response_kind: str) -> None:
     operation, user, earning = [str(uuid4()) for _ in range(3)]
     request = {"user_id": user, "skill_id": "ordinary skill", "xp": 1, "earning_id": earning}
-    result = {"operation_id": operation, "request": dict(request), "state": "applied", "applied": True}
+    result: dict[str, Any] = {"operation_id": operation, "request": dict(request), "state": "applied", "applied": True}
     status = 200
     if response_kind in {"404", "422", "503"}:
         status = int(response_kind)
@@ -192,7 +212,7 @@ async def test_transport_requires_exact_typed_receipt(mocker, response_kind):
         result["request"]["xp"] = True
     observed = []
 
-    def transport(req):
+    def transport(req: Any) -> Any:
         observed.append(req)
         return (
             httpx.Response(status, json=result)
@@ -221,3 +241,6 @@ async def test_transport_requires_exact_typed_receipt(mocker, response_kind):
     )
     assert outcome["state"] == expected
     assert len(observed) == 1 and observed[0].url.path == f"/_internal/xp-operations/{operation}/{user}/ordinary skill"
+
+
+remote = test_retained_events.remote

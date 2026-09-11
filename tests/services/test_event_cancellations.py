@@ -1,27 +1,47 @@
 """Actual local cancellation/claim transactions; backend declaration and grant authority are fixtures."""
 
 from copy import deepcopy
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Literal, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from pytest_mock import MockerFixture
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import db, filter_by, select
-from api.models import BookingPayment, EventRightGrant, RetainedEventRight, SettlementClaim, Slot, WebinarParticipant
+from api.models import (
+    BookingPayment,
+    EventRightGrant,
+    RetainedEventRight,
+    SettlementClaim,
+    Slot,
+    Webinar,
+    WebinarParticipant,
+)
 from api.models.event_cancellation import EventCancellation, EventCancellationClaimEvidence
 from api.services import event_cancellations, payment_claims, retained_events, settlements, shop
 from api.services.user_deletion import delete_user_data
 from api.services.user_export import export_user_data
 from api.utils.utc import utcnow
 from tests.payment_fixtures import paid_participant
+from tests.required import required
+from tests.services import test_retained_events
 from tests.services.test_event_succession import authorize
-from tests.services.test_retained_events import booking, canonical, remote
-from tests.services.test_user_deletion import OTHER, THIRD, USER, _slot
+from tests.services.test_retained_events import booking, canonical
+from tests.services.test_user_deletion import OTHER, USER, _slot
 
 
-async def original(remote, kind="webinar", role="participant", days=9, sibling=False):
+async def original(
+    remote: dict[str, Any],
+    kind: Literal["webinar", "coaching"] = "webinar",
+    role: str = "participant",
+    days: int = 9,
+    sibling: bool = False,
+) -> tuple[Webinar | Slot, RetainedEventRight, BookingPayment]:
     provider, student = (USER, OTHER) if role == "instructor" else (OTHER, USER)
+    event: Webinar | Slot
     if kind == "webinar":
         event, booked = await booking(student=student, provider=provider, days=days)
         pid = booked.payment_id
@@ -35,11 +55,13 @@ async def original(remote, kind="webinar", role="participant", days=9, sibling=F
         pid = event.payment_id
     remote[USER] = canonical(USER)
     await delete_user_data(USER)
-    right = await retained_events.right_for(pid, role)
-    return event, right, await db.get(BookingPayment, id=pid)
+    right = await retained_events.right_for(required(pid), role)
+    return event, required(right), required(await db.get(BookingPayment, id=pid))
 
 
-def declaration(mocker, right, received=None):
+def declaration(
+    mocker: MockerFixture, right: RetainedEventRight, received: datetime | None = None
+) -> tuple[str, dict[str, Any]]:
     command = str(uuid4())
     payload = {
         "command_id": command,
@@ -58,9 +80,9 @@ def declaration(mocker, right, received=None):
         "source": "authenticated_claimant_declaration",
         "declaration": payload,
     }
-    previous = shop.commercial.side_effect
+    previous = cast(AsyncMock, shop.commercial).side_effect
 
-    async def call(operation, body):
+    async def call(operation: str, body: dict[str, Any]) -> Any:
         if operation == "event_cancellation_authority":
             assert body == {"source_subject": USER, "command_id": command}
             return deepcopy(receipt)
@@ -73,8 +95,12 @@ def declaration(mocker, right, received=None):
 @pytest.mark.parametrize("kind", ["webinar", "coaching"])
 @pytest.mark.parametrize("role", ["participant", "instructor"])
 async def test_exact_declared_right_cancels_current_successor_and_preserves_financial_owner(
-    session, remote, mocker, kind, role
-):
+    session: AsyncSession,
+    remote: dict[str, Any],
+    mocker: MockerFixture,
+    kind: Literal["webinar", "coaching"],
+    role: str,
+) -> None:
     event, right, payment = await original(remote, kind, role, sibling=kind == "webinar" and role == "instructor")
     original_payment = (payment.user_id, payment.paid_coins, deepcopy(payment.evidence))
     siblings = {p.payment_id for p in await db.all(filter_by(WebinarParticipant, webinar_id=event.id))} - {payment.id}
@@ -87,10 +113,10 @@ async def test_exact_declared_right_cancels_current_successor_and_preserves_fina
     assert result["received_at"] == receipt["received_at"]
     assert result["payment_id"] == payment.id and result["unrelated_bookings_cancelled"] is False
     assert (payment.user_id, payment.paid_coins, payment.evidence) == original_payment
-    assert (await db.get(EventRightGrant, id=gid)).state == "withdrawn"
-    assert (await db.get(RetainedEventRight, id=right.id)).state == "cancelled"
+    assert (required(await db.get(EventRightGrant, id=gid))).state == "withdrawn"
+    assert (required(await db.get(RetainedEventRight, id=right.id))).state == "cancelled"
     if kind == "coaching":
-        assert (await db.get(Slot, id=event.id)).booked_by is None
+        assert (required(await db.get(Slot, id=event.id))).booked_by is None
     else:
         assert {p.payment_id for p in await db.all(filter_by(WebinarParticipant, webinar_id=event.id))} == siblings
     claims = await db.all(filter_by(SettlementClaim, user_id=payment.user_id))
@@ -103,7 +129,9 @@ async def test_exact_declared_right_cancels_current_successor_and_preserves_fina
     assert len(await db.all(select(EventCancellationClaimEvidence))) == 1
 
 
-async def test_original_receipt_survives_processing_rollback_then_exact_retry(session, remote, mocker):
+async def test_original_receipt_survives_processing_rollback_then_exact_retry(
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture
+) -> None:
     event, right, payment = await original(remote)
     command, receipt = declaration(mocker, right)
     real = event_cancellations.process
@@ -113,16 +141,18 @@ async def test_original_receipt_survives_processing_rollback_then_exact_retry(se
     with pytest.raises(RuntimeError):
         await event_cancellations.receive(USER, command)
     await db.session.rollback()
-    saved = await db.get(EventCancellation, id=command)
+    saved = required(await db.get(EventCancellation, id=command))
     assert saved.original == receipt and saved.result is None
     assert await db.all(select(SettlementClaim)) == []
     failed.side_effect = None
     failed.side_effect = real
     assert (await event_cancellations.receive(USER, command))["state"] == "applied"
-    assert (await db.get(EventCancellation, id=command)).original == receipt
+    assert (required(await db.get(EventCancellation, id=command))).original == receipt
 
 
-async def test_exact_old_command_does_not_cancel_replacement_same_event_booking(session, remote, mocker):
+async def test_exact_old_command_does_not_cancel_replacement_same_event_booking(
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture
+) -> None:
     event, right, payment = await original(remote)
     command, _ = declaration(mocker, right)
     first = await event_cancellations.receive(USER, command)
@@ -130,13 +160,13 @@ async def test_exact_old_command_does_not_cancel_replacement_same_event_booking(
     await db.add(replacement)
     await db.commit()
     assert await event_cancellations.receive(USER, command) == first
-    assert (await db.get(WebinarParticipant, payment_id=replacement.payment_id)).user_id == USER
+    assert (required(await db.get(WebinarParticipant, payment_id=replacement.payment_id))).user_id == USER
     assert not any(replacement.payment_id in row.payment_ids for row in await db.all(select(SettlementClaim)))
 
 
 async def test_later_cancellation_adds_evidence_to_same_pending_claim_without_rewriting_original(
-    session, remote, mocker
-):
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture
+) -> None:
     event, right, payment = await original(remote)
     batch = await settlements.new_batch("payout")
     old_basis = {"assessment": "original_performance_unknown", "cancellation_inferred_from_erasure": False}
@@ -151,7 +181,7 @@ async def test_later_cancellation_adds_evidence_to_same_pending_claim_without_re
         basis=old_basis,
     )
     await db.commit()
-    claim = await db.first(select(SettlementClaim))
+    claim: SettlementClaim = required(cast(SettlementClaim | None, await db.first(select(SettlementClaim))))
     original_id, original_created, original_coins = claim.id, claim.created_at, claim.coins
     command, _ = declaration(mocker, right)
     await event_cancellations.receive(USER, command)
@@ -166,14 +196,17 @@ async def test_later_cancellation_adds_evidence_to_same_pending_claim_without_re
 
 
 @pytest.mark.parametrize("spelling", ["upper", "braced", "compact"])
-async def test_original_uuid_spellings_keep_raw_receipt_and_apply_same_right(session, remote, mocker, spelling):
+async def test_original_uuid_spellings_keep_raw_receipt_and_apply_same_right(
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture, spelling: str
+) -> None:
     _, right, _ = await original(remote)
     command, receipt = declaration(mocker, right)
-    transform = {
+    transforms: dict[str, Callable[[str], str]] = {
         "upper": str.upper,
         "braced": lambda value: "{" + value + "}",
         "compact": lambda value: value.replace("-", ""),
-    }[spelling]
+    }
+    transform = transforms[spelling]
     receipt["right_id"] = transform(right.id)
     receipt["declaration"]["right_id"] = transform(right.id)
     receipt["declaration"]["source_subject"] = transform(USER)
@@ -183,25 +216,30 @@ async def test_original_uuid_spellings_keep_raw_receipt_and_apply_same_right(ses
     db.session.expire_all()
     assert first["state"] == "applied" and first["right_id"] == expected_right
     assert await event_cancellations.receive(USER, command) == first
-    assert (await db.get(EventCancellation, id=command)).original == raw
+    assert (required(await db.get(EventCancellation, id=command))).original == raw
 
 
 @pytest.mark.parametrize("offset", [-4, 2])
 @pytest.mark.parametrize("delta", [-1, 0, 1])
 async def test_fractional_offset_receipt_qualification_and_export_survive_reload(
-    session, remote, mocker, offset, delta
-):
+    session: AsyncSession, remote: dict[str, Any], mocker: MockerFixture, offset: int, delta: int
+) -> None:
     event, right, payment = await original(remote)
     received = utcnow().replace(microsecond=600123).astimezone(timezone(timedelta(hours=offset)))
     right.original = dict(right.original) | {"start": (received + timedelta(days=7, microseconds=delta)).isoformat()}
     await db.commit()
     command, receipt = declaration(mocker, right, received)
     first = await event_cancellations.receive(USER, command)
-    claim = await db.first(filter_by(SettlementClaim, event_id=event.id, user_id=payment.user_id))
+    claim: SettlementClaim = required(
+        cast(
+            SettlementClaim | None,
+            await db.first(filter_by(SettlementClaim, event_id=event.id, user_id=payment.user_id)),
+        )
+    )
     assert claim.entitlement == ("established" if delta >= 0 else "pending_evidence")
     # Model metadata may have lower precision on native engines. The immutable
     # authoritative instant remains exact across reload, result and owner export.
-    row = await db.get(EventCancellation, id=command)
+    row = required(await db.get(EventCancellation, id=command))
     row.received_at = received.astimezone(timezone.utc).replace(microsecond=0)
     await db.commit()
     db.session.expire_all()
@@ -210,3 +248,6 @@ async def test_fractional_offset_receipt_qualification_and_export_survive_reload
     assert exported[0]["received_at"] == received
     assert exported[0]["original"] == receipt
     assert first["received_at"] == received.astimezone(timezone.utc).isoformat()
+
+
+remote = test_retained_events.remote

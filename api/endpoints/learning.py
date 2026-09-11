@@ -69,7 +69,7 @@ async def existing_events(subject: str, event_id: str | None = None) -> list[dic
             RetainedEventRight.event_id, RetainedEventRight.id
         )
     )
-    result = {}
+    result: dict[tuple[str, str], dict[str, Any]] = {}
     for right in rights:
         identity = (right.event_id, right.role)
         if event_id is not None and event_id != right.event_id:
@@ -78,7 +78,7 @@ async def existing_events(subject: str, event_id: str | None = None) -> list[dic
         # exact currently granted right supplies this subject's access evidence.
         if right.id not in right_ids:
             continue
-        model = Webinar if right.kind == "webinar" else Slot
+        model: type[Webinar] | type[Slot] = Webinar if right.kind == "webinar" else Slot
         event = await db.first(
             filter_by(model, id=right.event_id).with_for_update().execution_options(populate_existing=True)
         )
@@ -152,7 +152,7 @@ async def calendar(user: User = Depends(learning_auth)) -> dict[str, Any]:
         user.id, False, None, None, None, None, None, None, None, None, None, None, None, None, None
     )
     for response in events:
-        model = Webinar if response.type.value == "webinar" else Slot
+        model: type[Webinar] | type[Slot] = Webinar if response.type.value == "webinar" else Slot
         event = await db.get(model, id=response.id)
         apply_scoped_links(response, event, user.id, access)
     return {"events": events}

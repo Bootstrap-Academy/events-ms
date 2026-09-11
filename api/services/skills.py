@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any, cast
 
 from pydantic import BaseModel, Extra
 
@@ -53,7 +53,7 @@ async def add_xp(user_id: str, skill_id: str, xp: int) -> None:
         await client.post(f"/skills/{user_id}/{skill_id}", json={"xp": xp})
 
 
-async def apply_xp_benefit(operation: str, request: dict) -> dict:
+async def apply_xp_benefit(operation: str, request: dict[str, Any]) -> dict[str, Any]:
     """Only the exact committed receiver contract establishes a delivery result."""
     import json
     from urllib.parse import quote

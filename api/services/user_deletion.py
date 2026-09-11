@@ -124,7 +124,8 @@ async def delete_user_data(user_id: str) -> None:
                     webinar.closed_to_new_bookings = True
                 continue
             declaration = retained_events.cancellation_declaration(receipt.canonical, payment.id)
-            assert declaration is not None
+            if not (declaration is not None):
+                raise AssertionError("Required original evidence is unavailable or mismatched")
             cancellation_time = retained_events.declaration_time(declaration)
             cancellation_basis = basis | {
                 "request_kind": "identified_service_cancellation",
@@ -204,7 +205,8 @@ async def delete_user_data(user_id: str) -> None:
                     slot.weekly_slot = None
                 continue
             declaration = retained_events.cancellation_declaration(receipt.canonical, payment.id)
-            assert declaration is not None
+            if not (declaration is not None):
+                raise AssertionError("Required original evidence is unavailable or mismatched")
             cancellation_time = retained_events.declaration_time(declaration)
             cancellation_basis = basis | {
                 "request_kind": "identified_service_cancellation",

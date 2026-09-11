@@ -9,12 +9,16 @@ import asyncio
 import json
 from contextvars import ContextVar
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, AsyncIterator, Mapping, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from _pytest.monkeypatch import MonkeyPatch
 from httpx import AsyncClient, MockTransport, Response
+from pytest_mock import MockerFixture
 from sqlalchemy import event as sql_event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import Session
@@ -28,19 +32,23 @@ from api.models.ordinary_cancellation import OrdinaryCancellationClaimEvidence, 
 from api.models.settlement import SettlementBatch
 from api.schemas.ordinary_cancellation import CancellationDeclaration, CancellationPreparation
 from api.schemas.user import User
-from api.services import ordinary_cancellations as ordinary, settlements
+from api.services import ordinary_cancellations as ordinary
+from api.services import settlements
 from api.services.internal import InternalService
 from tests.payment_fixtures import paid_participant
+from tests.required import required
 from tests.services.test_retained_events import booking
 from tests.services.test_user_deletion import OTHER, USER
 
 
-def columns(row):
+def columns(row: Any) -> dict[str, Any]:
     return deepcopy({column.name: getattr(row, column.name) for column in row.__table__.columns})
 
 
 @pytest.fixture
-async def isolated(database, tmp_path, monkeypatch, mocker):
+async def isolated(
+    database: None, tmp_path: Path, monkeypatch: MonkeyPatch, mocker: MockerFixture
+) -> AsyncIterator[SimpleNamespace]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'ordinary-interruption.sqlite'}")
     monkeypatch.setattr(db, "engine", engine)
     monkeypatch.setattr(db, "committed_read_engine", None)
@@ -68,31 +76,31 @@ async def isolated(database, tmp_path, monkeypatch, mocker):
     )
     listeners = []
 
-    def listen(target, name, callback):
+    def listen(target: Any, name: Any, callback: Any) -> None:
         sql_event.listen(target, name, callback)
         listeners.append((target, name, callback))
 
-    def checkout(connection, record, proxy):
+    def checkout(connection: Any, record: Any, proxy: Any) -> None:
         record.info["qa_record"] = id(record)
         state.active[id(record)] = None
 
-    def begin(session, transaction, connection):
+    def begin(session: AsyncSession, transaction: Any, connection: Any) -> None:
         if connection.engine is engine.sync_engine:
             connection.info["qa_session"] = id(session)
             record_id = connection.info["qa_record"]
             state.active[record_id] = id(session)
             state.trace.append(["begin", id(session), id(transaction), record_id])
 
-    def checkin(connection, record):
+    def checkin(connection: Any, record: Any) -> None:
         state.trace.append(["checkin", record.info.get("qa_session"), id(record)])
         state.active.pop(id(record), None)
 
-    def rollback(session, transaction):
+    def rollback(session: AsyncSession, transaction: Any) -> None:
         if session.bind is engine.sync_engine:
             state.rollbacks.append((id(session), id(transaction)))
             state.trace.append(["rollback", id(session), id(transaction)])
 
-    def disposed(value):
+    def disposed(value: Any) -> None:
         assert value is engine.sync_engine
         state.disposals += 1
 
@@ -103,7 +111,7 @@ async def isolated(database, tmp_path, monkeypatch, mocker):
     listen(Session, "after_soft_rollback", rollback)
     real_commit = AsyncSession.commit
 
-    async def observed_commit(session):
+    async def observed_commit(session: AsyncSession) -> None:
         transaction = session.sync_session.get_transaction()
         await real_commit(session)
         sid = id(session.sync_session)
@@ -113,7 +121,7 @@ async def isolated(database, tmp_path, monkeypatch, mocker):
         if command:
             matches = [
                 row
-                for row in session.identity_map.values()
+                for row in cast(Mapping[Any, Any], session.identity_map).values()
                 if isinstance(row, OrdinaryEventCancellation) and row.id == command
             ]
             assert len(matches) == 1 and matches[0].result is None and matches[0].last_attempt_at is None
@@ -121,18 +129,18 @@ async def isolated(database, tmp_path, monkeypatch, mocker):
             state.trace.append(["accepted_commit_completed", command, sid])
             # The actual driver/session commit has returned. Cancellation at the
             # next scheduling point cannot be mistaken for precommit acceptance.
-            asyncio.current_task().cancel()
+            required(asyncio.current_task()).cancel()
             await asyncio.sleep(0)
         if session.info.get("qa_booking_scan"):
             state.cycle.set()
 
     monkeypatch.setattr(AsyncSession, "commit", observed_commit)
 
-    async def pause(stage, claim_id, batch_id):
+    async def pause(stage: str, claim_id: str, batch_id: str) -> None:
         session = db.session
         saved = [
             row
-            for row in session.identity_map.values()
+            for row in cast(Mapping[Any, Any], session.identity_map).values()
             if isinstance(row, OrdinaryEventCancellation) and row.id == state.command
         ]
         assert len(saved) == 1
@@ -140,7 +148,10 @@ async def isolated(database, tmp_path, monkeypatch, mocker):
         assert (saved[0].result is None) == (stage == "precommit")
         assert (transaction is not None) == (stage == "precommit")
         if stage == "postcommit":
-            assert saved[0].result["claim_ids"] == [claim_id] and saved[0].result["batch_id"] == batch_id
+            assert (
+                required(saved[0].result)["claim_ids"] == [claim_id]
+                and required(saved[0].result)["batch_id"] == batch_id
+            )
         state.interrupted = SimpleNamespace(
             session=session,
             sid=id(session.sync_session),
@@ -161,7 +172,7 @@ async def isolated(database, tmp_path, monkeypatch, mocker):
 
     real_all = db.all
 
-    async def observed_all(query):
+    async def observed_all(query: Any) -> Any:
         result = await real_all(query)
         entity = query.column_descriptions[0].get("entity") if query.column_descriptions else None
         if asyncio.current_task() is state.worker and entity is BookingContract:
@@ -170,7 +181,7 @@ async def isolated(database, tmp_path, monkeypatch, mocker):
         if state.enabled and state.stage == "precommit" and entity is CommercialBatchClaim and result:
             saved = [
                 row
-                for row in db.session.identity_map.values()
+                for row in cast(Mapping[Any, Any], db.session.identity_map).values()
                 if isinstance(row, OrdinaryEventCancellation) and row.id == state.command
             ]
             if saved and saved[0].result is None:
@@ -193,7 +204,7 @@ async def isolated(database, tmp_path, monkeypatch, mocker):
     mocker.patch.object(InternalService.SHOP, "_value_", "http://services.synthetic.test")
     mocker.patch.object(InternalService, "_get_token", return_value="synthetic-internal-proof")
 
-    async def http(request):
+    async def http(request: Any) -> Any:
         body = json.loads(request.content) if request.content else None
         state.requests.append([request.method, request.url.path, deepcopy(body)])
         if request.url.path.endswith("/claims/event_cancellation_pending"):
@@ -207,16 +218,16 @@ async def isolated(database, tmp_path, monkeypatch, mocker):
             ):
                 handoff = [
                     row
-                    for row in db.session.identity_map.values()
+                    for row in cast(Mapping[Any, Any], db.session.identity_map).values()
                     if isinstance(row, CommercialHandoff) and row.claim_id == claim_id
                 ]
                 assert len(handoff) == 1 and handoff[0].payload == body and handoff[0].acknowledged_at is None
                 receipt = next(
                     row
-                    for row in db.session.identity_map.values()
+                    for row in cast(Mapping[Any, Any], db.session.identity_map).values()
                     if isinstance(row, OrdinaryEventCancellation) and row.id == state.command
                 )
-                await pause("postcommit", claim_id, receipt.result["batch_id"])
+                await pause("postcommit", claim_id, required(receipt.result)["batch_id"])
             return Response(
                 200,
                 json={
@@ -233,7 +244,7 @@ async def isolated(database, tmp_path, monkeypatch, mocker):
             return Response(200, json={"email_verified": True, "email": "fixture@example.test"})
         raise AssertionError(f"Unexpected external request: {request.method} {request.url.path}")
 
-    def client(*args, **kwargs):
+    def client(*args: Any, **kwargs: Any) -> Any:
         value = AsyncClient(*args, **kwargs, transport=MockTransport(http))
         state.clients.append(value)
         return value
@@ -257,12 +268,12 @@ async def isolated(database, tmp_path, monkeypatch, mocker):
             sql_event.remove(target, name, callback)
 
 
-async def accepted_original(state):
+async def accepted_original(state: SimpleNamespace) -> SimpleNamespace:
     user = User(id=USER, admin=False, email_verified=True)
     async with db_context():
         event, seat = await booking()
         prepared = await ordinary.prepare(user, event.id, CancellationPreparation(kind="webinar", scope="auto"))
-        payment = await db.get(BookingPayment, id=seat.payment_id)
+        payment = required(await db.get(BookingPayment, id=seat.payment_id))
         event_id, payment_id, payment_before = event.id, payment.id, columns(payment)
     command = str(uuid4())
     body = CancellationDeclaration(
@@ -271,7 +282,7 @@ async def accepted_original(state):
         original_text="Cancel only this displayed original booking.",
     )
 
-    async def intake():
+    async def intake() -> None:
         async with db_context():
             db.session.info["qa_accept_command"] = command
             await ordinary.receive(user, command, body)
@@ -298,7 +309,7 @@ async def accepted_original(state):
     )
 
 
-def start_worker(state, monkeypatch):
+def start_worker(state: SimpleNamespace, monkeypatch: MonkeyPatch) -> list[asyncio.Task[Any]]:
     state.cycle, state.booking_close = asyncio.Event(), None
     state.worker = asyncio.create_task(app.confirmation_loop())
     companions = [asyncio.create_task(asyncio.Event().wait()) for _ in range(2)]
@@ -309,13 +320,13 @@ def start_worker(state, monkeypatch):
     return [state.worker, *companions]
 
 
-async def completed_cycle(state):
+async def completed_cycle(state: SimpleNamespace) -> None:
     await asyncio.wait_for(state.cycle.wait(), 12)
     assert state.booking_close is not None
     await asyncio.wait_for(state.booking_close.wait(), 2)
 
 
-async def cancel_tasks(tasks):
+async def cancel_tasks(tasks: Any) -> None:
     for task in tasks:
         task.cancel()
     await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 2)
@@ -325,11 +336,11 @@ async def cancel_tasks(tasks):
 @pytest.mark.parametrize("stage", ["precommit", "postcommit"])
 @pytest.mark.parametrize("interruption", ["deadline", "shutdown"])
 async def test_real_ordinary_recovery_interruption_keeps_original_receipt_and_resumes_once(
-    isolated, monkeypatch, stage, interruption
-):
+    isolated: SimpleNamespace, monkeypatch: MonkeyPatch, stage: str, interruption: str
+) -> None:
     state = isolated
-    primary = await accepted_original(state)
-    secondary = await accepted_original(state)
+    primary = required(await accepted_original(state))
+    secondary = required(await accepted_original(state))
     async with db_context():
         # Existing fulfilled, closed contract awaiting its report acknowledgment;
         # this control is continued reporting, not a new SQLite booking admission.
@@ -367,7 +378,8 @@ async def test_real_ordinary_recovery_interruption_keeps_original_receipt_and_re
     assert interrupted.close_event.is_set()
     assert not interrupted.session.in_transaction()
     assert interrupted.sid not in state.active.values()
-    after_barrier = state.trace[interrupted.trace_index + 1 :]
+    barrier_end = interrupted.trace_index + 1
+    after_barrier = state.trace[barrier_end:]
     if stage == "precommit":
         assert ["rollback", interrupted.sid, interrupted.transaction] in after_barrier
         assert all(["checkin", interrupted.sid, record] in after_barrier for record in interrupted.connections)
@@ -375,7 +387,7 @@ async def test_real_ordinary_recovery_interruption_keeps_original_receipt_and_re
         assert any(sid == interrupted.sid and transaction is not None for sid, transaction in state.commits)
 
     async with db_context():
-        saved = await db.get(OrdinaryEventCancellation, id=primary.command)
+        saved = required(await db.get(OrdinaryEventCancellation, id=primary.command))
         assert saved.original == primary.original and saved.last_attempt_at is not None
         assert columns(await db.get(BookingPayment, id=primary.payment_id)) == primary.payment_before
         claims = await db.all(filter_by(SettlementClaim, event_id=primary.event_id))
@@ -386,15 +398,17 @@ async def test_real_ordinary_recovery_interruption_keeps_original_receipt_and_re
             assert await db.get(CoinOperation, id=interrupted.claim_id) is None
             assert await db.get(CommercialHandoff, claim_id=interrupted.claim_id) is None
             assert await db.all(filter_by(CommercialBatchClaim, batch_id=interrupted.batch_id)) == []
-            assert (await db.get(WebinarParticipant, payment_id=primary.payment_id)).user_id == USER
+            assert (required(await db.get(WebinarParticipant, payment_id=primary.payment_id))).user_id == USER
         else:
-            assert saved.result["state"] == "applied" and saved.result["claim_ids"] == [interrupted.claim_id]
+            assert required(saved.result)["state"] == "applied" and required(saved.result)["claim_ids"] == [
+                interrupted.claim_id
+            ]
             assert len(claims) == 1 and claims[0].id == interrupted.claim_id
             handoff = await db.get(CommercialHandoff, claim_id=interrupted.claim_id)
             assert handoff is not None and handoff.acknowledged_at is None
             assert handoff.payload["observation"]["basis"]["ordinary_cancellation_command_id"] == primary.command
-            assert (await db.get(SettlementBatch, id=interrupted.batch_id)).notified_at is None
-            assert (await db.get(CoinOperation, id=interrupted.claim_id)).completed_at is None
+            assert (required(await db.get(SettlementBatch, id=interrupted.batch_id))).notified_at is None
+            assert (required(await db.get(CoinOperation, id=interrupted.claim_id))).completed_at is None
             assert await db.get(WebinarParticipant, payment_id=primary.payment_id) is None
 
     state.enabled = False
@@ -405,14 +419,17 @@ async def test_real_ordinary_recovery_interruption_keeps_original_receipt_and_re
     # settlement recovery must finish their durable pending handoff/notice.
     await settlements.recover_settlements()
     async with db_context():
-        saved = await db.get(OrdinaryEventCancellation, id=primary.command)
-        first_result = deepcopy(saved.result)
+        saved = required(await db.get(OrdinaryEventCancellation, id=primary.command))
+        first_result = deepcopy(required(saved.result))
         [claim] = await db.all(filter_by(SettlementClaim, event_id=primary.event_id))
         claim_id, batch_id = claim.id, claim.batch_id
         assert saved.original == primary.original and first_result["claim_ids"] == [claim_id]
         assert claim.user_id == USER and claim.payment_ids == [primary.payment_id] and claim.coins == 1337
-        assert (await db.get(OrdinaryEventCancellation, id=secondary.command)).result["state"] == "applied"
-        assert (await db.get(BookingContract, id=state.report_id)).reported is True
+        assert (
+            required((required(await db.get(OrdinaryEventCancellation, id=secondary.command))).result)["state"]
+            == "applied"
+        )
+        assert (required(await db.get(BookingContract, id=state.report_id))).reported is True
         if stage == "postcommit":
             assert (claim_id, batch_id) == (interrupted.claim_id, interrupted.batch_id)
         else:
@@ -422,8 +439,8 @@ async def test_real_ordinary_recovery_interruption_keeps_original_receipt_and_re
         evidence_before, claim_before = columns(evidence[0]), columns(claim)
         operation_before = columns(await db.get(CoinOperation, id=claim_id))
         assert operation_before["completed_at"] is None
-        assert (await db.get(CommercialHandoff, claim_id=claim_id)).acknowledged_at is not None
-        assert (await db.get(SettlementBatch, id=batch_id)).notified_at is not None
+        assert (required(await db.get(CommercialHandoff, claim_id=claim_id))).acknowledged_at is not None
+        assert (required(await db.get(SettlementBatch, id=batch_id))).notified_at is not None
         replacement = await db.add(paid_participant(webinar_id=primary.event_id, user_id=USER, paid_coins=42))
         replacement_id = replacement.payment_id
     await ordinary.recover()
@@ -432,7 +449,7 @@ async def test_real_ordinary_recovery_interruption_keeps_original_receipt_and_re
         replay = await ordinary.receive(primary.user, primary.command, primary.body)
         assert replay["state"] == "applied" and replay["financial_satisfaction"] is False
         assert replay["received_at"] == primary.original["received_at"]
-        saved = await db.get(OrdinaryEventCancellation, id=primary.command)
+        saved = required(await db.get(OrdinaryEventCancellation, id=primary.command))
         assert saved.original == primary.original and saved.result == first_result
         [claim] = await db.all(filter_by(SettlementClaim, event_id=primary.event_id))
         assert columns(claim) == claim_before and claim.payment_ids == [primary.payment_id]
@@ -440,7 +457,7 @@ async def test_real_ordinary_recovery_interruption_keeps_original_receipt_and_re
         [evidence] = await db.all(filter_by(OrdinaryCancellationClaimEvidence, command_id=primary.command))
         assert columns(evidence) == evidence_before
         assert columns(await db.get(BookingPayment, id=primary.payment_id)) == primary.payment_before
-        assert (await db.get(WebinarParticipant, payment_id=replacement_id)).user_id == USER
+        assert (required(await db.get(WebinarParticipant, payment_id=replacement_id))).user_id == USER
         assert len(await db.all(select(OrdinaryEventCancellation))) == 2
     assert state.smtp.await_count >= 4
     print(

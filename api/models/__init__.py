@@ -14,6 +14,13 @@ from .weekly_slots import WeeklySlot
 
 
 __all__ = [
+    "EventBenefit",
+    "EventBenefitObservation",
+    "EventCancellation",
+    "EventCancellationClaimEvidence",
+    "OrdinaryCancellationClaimEvidence",
+    "OrdinaryCancellationTarget",
+    "OrdinaryEventCancellation",
     "EventRightGrant",
     "EventSubjectGuard",
     "RetainedEventRight",
@@ -37,7 +44,6 @@ __all__ = [
 ]
 
 from .benefit import EventBenefit, EventBenefitObservation
-
 from .event_cancellation import EventCancellation, EventCancellationClaimEvidence
 from .ordinary_cancellation import (
     OrdinaryCancellationClaimEvidence,

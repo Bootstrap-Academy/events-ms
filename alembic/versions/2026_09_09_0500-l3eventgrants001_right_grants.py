@@ -1,6 +1,9 @@
 """Exact existing-event continuation and local target erasure serialization."""
+
 from alembic import op
+
 import sqlalchemy as sa
+
 
 revision = "l3eventgrants001"
 down_revision = "l3eventrights001"
@@ -16,8 +19,10 @@ def upgrade() -> None:
         mysql_collate="utf8mb4_bin",
     )
     # This is an explicit local erasure record, not inference from remote404.
-    op.execute("INSERT INTO events_subject_guards(subject,deleted) "
-               "SELECT subject,true FROM events_commercial_erasure_receipts WHERE erased_at IS NOT NULL")
+    op.execute(
+        "INSERT INTO events_subject_guards(subject,deleted) "
+        "SELECT subject,true FROM events_commercial_erasure_receipts WHERE erased_at IS NOT NULL"
+    )
     op.create_table(
         "events_right_grants",
         sa.Column("id", sa.String(36), primary_key=True),

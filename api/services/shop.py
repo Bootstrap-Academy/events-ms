@@ -6,19 +6,23 @@ from api.services.internal import InternalService
 @overload
 async def commercial(
     operation: Literal["erasure", "register_event", "inventory", "event_cancellation_authority"], body: dict[str, Any]
-) -> dict[str, Any] | None: ...
+) -> dict[str, Any] | None:
+    pass
 
 
 @overload
-async def commercial(operation: Literal["event_cancellation_pending"], body: dict[str, Any]) -> list[Any]: ...
+async def commercial(operation: Literal["event_cancellation_pending"], body: dict[str, Any]) -> list[Any]:
+    pass
 
 
 @overload
-async def commercial(operation: Literal["event_cancellation_outcome"], body: dict[str, Any]) -> dict[str, Any]: ...
+async def commercial(operation: Literal["event_cancellation_outcome"], body: dict[str, Any]) -> dict[str, Any]:
+    pass
 
 
 @overload
-async def commercial(operation: str, body: dict[str, Any]) -> dict[str, Any] | list[Any] | None: ...
+async def commercial(operation: str, body: dict[str, Any]) -> dict[str, Any] | list[Any] | None:
+    pass
 
 
 async def commercial(operation: str, body: dict[str, Any]) -> dict[str, Any] | list[Any] | None:

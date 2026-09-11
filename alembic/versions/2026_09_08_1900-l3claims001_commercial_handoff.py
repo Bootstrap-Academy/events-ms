@@ -4,8 +4,12 @@ Revision ID: l3claims001
 Revises: l1events002
 """
 
+import json
+
 from alembic import op
+
 import sqlalchemy as sa
+
 
 revision = "l3claims001"
 down_revision = "l1events002"
@@ -18,7 +22,9 @@ def upgrade() -> None:
         "events_settlement_claims",
         sa.Column("entitlement", sa.String(32), nullable=False, server_default="legacy_review"),
     )
-    op.add_column("events_settlement_claims", sa.Column("basis", sa.JSON(), nullable=False, server_default="{}"))
+    op.add_column(
+        "events_settlement_claims", sa.Column("basis", sa.JSON(), nullable=False, server_default=json.dumps({}))
+    )
     op.create_table(
         "events_commercial_handoffs",
         sa.Column("claim_id", sa.String(36), sa.ForeignKey("events_settlement_claims.id"), primary_key=True),

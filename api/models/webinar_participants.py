@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import BigInteger, Column, ForeignKey, String, event, inspect
 from sqlalchemy.orm import Mapped, Session, relationship
@@ -25,11 +25,11 @@ _SEAT_CHANGES = "events_seat_changes"
 _SEAT_SAVEPOINTS = "events_seat_savepoints"
 
 
-@event.listens_for(Session, "after_flush")
 def _record_seat_changes(session: Session, _: Any) -> None:
+    # Keep SQLAlchemy IdentitySet union/order; its stubs also expose NotImplemented.
     changed = [
         row
-        for row in session.new | session.dirty | session.deleted
+        for row in cast(Any, session.new) | session.dirty | session.deleted
         if isinstance(row, WebinarParticipant)
         and (row in session.new or row in session.deleted or session.is_modified(row, include_collections=False))
     ]
@@ -45,19 +45,16 @@ def _record_seat_changes(session: Session, _: Any) -> None:
             changes[(row.webinar_id, row.user_id)] = (row.payment_id,)
 
 
-@event.listens_for(Session, "after_transaction_create")
 def _save_seat_changes(session: Session, transaction: Any) -> None:
     if transaction.nested:
         session.info.setdefault(_SEAT_SAVEPOINTS, {})[transaction] = dict(session.info.get(_SEAT_CHANGES, {}))
 
 
-@event.listens_for(Session, "after_soft_rollback")
 def _restore_seat_changes(session: Session, transaction: Any) -> None:
     if transaction.nested:
         session.info[_SEAT_CHANGES] = session.info.get(_SEAT_SAVEPOINTS, {}).pop(transaction, {})
 
 
-@event.listens_for(Session, "after_transaction_end")
 def _clear_seat_changes(session: Session, transaction: Any) -> None:
     if transaction.parent is None:
         session.info.pop(_SEAT_CHANGES, None)
@@ -67,3 +64,9 @@ def _clear_seat_changes(session: Session, transaction: Any) -> None:
 def own_seat_changes(session: Session) -> dict[tuple[str, str], tuple[str | None] | None]:
     """Flushed changes only; root commit/rollback and savepoint rollback are scoped."""
     return dict(session.info.get(_SEAT_CHANGES, {}))
+
+
+event.listen(Session, "after_flush", _record_seat_changes)
+event.listen(Session, "after_transaction_create", _save_seat_changes)
+event.listen(Session, "after_soft_rollback", _restore_seat_changes)
+event.listen(Session, "after_transaction_end", _clear_seat_changes)

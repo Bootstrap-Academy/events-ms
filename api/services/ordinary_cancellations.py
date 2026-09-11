@@ -1,12 +1,12 @@
 """Exact ordinary declarations, immutable receipts and separately assessed returns."""
 
-from datetime import datetime, timezone
 import json
-from sqlalchemy import func
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, cast
 from uuid import uuid4
 
 from fastapi import HTTPException
+from sqlalchemy import func
 
 from api.database import db, db_context, filter_by, select
 from api.logger import get_logger
@@ -70,11 +70,11 @@ async def occupancy(event: Any, kind: str) -> list[Any]:
 
 
 def recipient(booking: Any, kind: str) -> str:
-    return booking.user_id if kind == "webinar" else booking.booked_by
+    return cast(str, booking.user_id if kind == "webinar" else booking.booked_by)
 
 
 def current_provider(event: Any, kind: str) -> str:
-    return event.creator if kind == "webinar" else event.user_id
+    return cast(str, event.creator if kind == "webinar" else event.user_id)
 
 
 async def payment_inventory(ids: list[str]) -> dict[str, BookingPayment]:
@@ -158,7 +158,7 @@ async def owned_receipt(actor: str, command: str, *, lock: bool = False) -> Ordi
     row = await db.first(query.with_for_update() if lock else query)
     if row is None or row.actor_id != actor:
         raise HTTPException(404, "Cancellation receipt unavailable")
-    return row
+    return cast(OrdinaryEventCancellation, row)
 
 
 async def receive(
@@ -207,7 +207,8 @@ async def receive(
         logger.exception("Accepted ordinary cancellation application remains pending")
         await db.session.rollback()
     saved = await owned_receipt(user.id, command)
-    assert saved is not None
+    if not (saved is not None):
+        raise AssertionError("Required original evidence is unavailable or mismatched")
     return await receipt_view(saved)
 
 
@@ -290,7 +291,7 @@ async def apply_saved(actor_id: str, command: str) -> None:
         "cancellation_inferred_from_erasure": False,
         "event_start": target["start"],
     }
-    observations = []
+    observations: list[tuple[Any, list[BookingPayment], str, dict[str, Any]]] = []
     for order in target["orders"]:
         payment = payments[order["payment_id"]]
         if target["role"] == "participant":
@@ -380,7 +381,7 @@ async def apply_saved(actor_id: str, command: str) -> None:
     try:
         await clear_cache("calendar")
     except Exception:
-        pass
+        logger.warning("Calendar cache refresh failed after committed cancellation")
     try:
         await settlements.finish([batch.id])
     except Exception:
@@ -426,7 +427,7 @@ async def record_assessments(
 ) -> None:
     # Whole-session calls may encounter one original aggregate through several
     # orders or roles. Assemble its complete observation before immutable insert.
-    groups = {}
+    groups: dict[str, tuple[Any, dict[str, dict[str, Any]]]] = {}
     for claim, payments, entitlement, basis in observations:
         owner, components = groups.setdefault(claim.id, (claim, {}))
         key = json.dumps([entitlement, basis], sort_keys=True)

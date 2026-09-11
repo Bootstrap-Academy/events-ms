@@ -1,7 +1,7 @@
 """Endpoints related to the calendar."""
 
 from datetime import timedelta
-from typing import Any, Type, cast
+from typing import Any, Callable, Coroutine, Type, cast
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request
@@ -26,12 +26,12 @@ from api.utils.utc import utcfromtimestamp, utcnow
 
 
 class CancellationReceiptRoute(APIRoute):
-    def get_route_handler(self):
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         handler = super().get_route_handler()
         if self.path != "/calendar/cancellations/{command_id}" or "POST" not in self.methods:
             return handler
 
-        async def record_body_receipt(request: Request):
+        async def record_body_receipt(request: Request) -> Response:
             # Complete body arrival precedes awaited token/current-authority checks.
             # FastAPI reuses these cached bytes and still validates the schema.
             await request.body()

@@ -5,7 +5,7 @@ remain actionable after target erasure, and receipt replay never selects a new b
 """
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
@@ -13,6 +13,7 @@ from sqlalchemy import select as sql_select
 
 from api.database import db, filter_by, select
 from api.models import BookingPayment, EventRightGrant, RetainedEventRight, Slot, Webinar, WebinarParticipant
+from api.models.booking_contract import BookingContract
 from api.models.event_cancellation import EventCancellation, EventCancellationClaimEvidence
 from api.services import booking_contracts, payment_claims, retained_events, settlements, shop
 from api.utils.utc import utcnow
@@ -50,18 +51,27 @@ async def receive(source: str, command: str) -> dict[str, Any]:
             "event_cancellation_authority", {"source_subject": source, "command_id": command}
         )
         try:
-            assert isinstance(receipt, dict)
+            if not (isinstance(receipt, dict)):
+                raise AssertionError("Required original evidence is unavailable or mismatched")
             declaration = receipt["declaration"]
             received = datetime.fromisoformat(receipt["received_at"].replace("Z", "+00:00"))
             right_id = str(UUID(str(receipt["right_id"]).strip()))
-            assert received.tzinfo is not None and receipt["command_id"] == command
-            assert receipt["protocol"] == 1 and receipt["source_subject"] == source
-            assert receipt["purpose"] == "cancel_identified_event_contract"
-            assert receipt["source"] == "authenticated_claimant_declaration"
-            assert declaration["cancel_identified_contract"] is True
-            assert str(UUID(str(declaration["right_id"]).strip())) == right_id
-            assert str(UUID(str(declaration["source_subject"]).strip())) == source
-            assert isinstance(declaration["original_text"], str) and declaration["original_text"].strip()
+            if not (received.tzinfo is not None and receipt["command_id"] == command):
+                raise AssertionError("Required original evidence is unavailable or mismatched")
+            if not (receipt["protocol"] == 1 and receipt["source_subject"] == source):
+                raise AssertionError("Required original evidence is unavailable or mismatched")
+            if not (receipt["purpose"] == "cancel_identified_event_contract"):
+                raise AssertionError("Required original evidence is unavailable or mismatched")
+            if not (receipt["source"] == "authenticated_claimant_declaration"):
+                raise AssertionError("Required original evidence is unavailable or mismatched")
+            if declaration["cancel_identified_contract"] is not True:
+                raise AssertionError("Required original evidence is unavailable or mismatched")
+            if not (str(UUID(str(declaration["right_id"]).strip())) == right_id):
+                raise AssertionError("Required original evidence is unavailable or mismatched")
+            if not (str(UUID(str(declaration["source_subject"]).strip())) == source):
+                raise AssertionError("Required original evidence is unavailable or mismatched")
+            if not (isinstance(declaration["original_text"], str) and declaration["original_text"].strip()):
+                raise AssertionError("Required original evidence is unavailable or mismatched")
             received = received.astimezone(timezone.utc)
         except (AssertionError, KeyError, ValueError, TypeError, AttributeError):
             raise HTTPException(503, "Original cancellation declaration unavailable") from None
@@ -98,10 +108,14 @@ async def receive(source: str, command: str) -> dict[str, Any]:
 
 async def process(command: str) -> dict[str, Any]:
     saved = await db.get(EventCancellation, id=command)
-    assert saved is not None
+    if not (saved is not None):
+        raise AssertionError("Required original evidence is unavailable or mismatched")
     await retained_events.lock_subject(saved.source_subject)
-    saved = await db.first(
-        filter_by(EventCancellation, id=command).with_for_update().execution_options(populate_existing=True)
+    saved = cast(
+        EventCancellation,
+        await db.first(
+            filter_by(EventCancellation, id=command).with_for_update().execution_options(populate_existing=True)
+        ),
     )
     if saved.result is not None:
         return saved.result
@@ -161,7 +175,7 @@ async def process(command: str) -> dict[str, Any]:
     facts = payment.original.get("commercial_event", {})
     instructor = facts.get("instructor_id")
     if not instructor:
-        contract = await db.get(booking_contracts.BookingContract, id=payment.id)
+        contract = await db.get(BookingContract, id=payment.id)
         instructor = contract.offer.get("product", {}).get("facts", {}).get("instructor_id") if contract else None
     if right.role == "instructor":
         await payment_claims.credit(

@@ -58,9 +58,14 @@ async def erasure_receipt(subject: str) -> CommercialErasureReceipt:
 
 
 async def payment_for_erasure(booking: Any, kind: str, event_id: str, student: str) -> BookingPayment:
-    payment = (
-        await db.first(
-            filter_by(BookingPayment, id=booking.payment_id).with_for_update().execution_options(populate_existing=True)
+    payment: BookingPayment | None = (
+        cast(
+            BookingPayment | None,
+            await db.first(
+                filter_by(BookingPayment, id=booking.payment_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ),
         )
         if booking.payment_id
         else None
@@ -348,7 +353,7 @@ async def cleanup_claims(payment: BookingPayment, event: Any, instructor: str, b
     ):
         if source is not None:
             await retained_events.preserve_on_erasure(
-                subject, SimpleNamespace(canonical=source, observed_at=observed), payment, event, role
+                cast(str, subject), SimpleNamespace(canonical=source, observed_at=observed), payment, event, role
             )
     # Ended availability is not proof of attendance/performance. These rights
     # need actual resolution after their original period, never invented renewal.
@@ -476,7 +481,7 @@ async def preserve_detached_claims(subject: str, receipt: CommercialErasureRecei
                     basis
                     | {
                         "request_kind": "identified_service_cancellation",
-                        "request_received_at": cancelled_at.isoformat(),
+                        "request_received_at": cast(datetime, cancelled_at).isoformat(),
                     },
                 )
             else:

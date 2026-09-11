@@ -16,6 +16,7 @@ from ..settings import settings
 from ..utils.utc import utcnow
 from api.database import Base, db, db_wrapper, select
 from api.models.booking_contract import BookingContract
+from api.models.booking_payment import BookingPayment
 
 
 if TYPE_CHECKING:
@@ -94,7 +95,7 @@ async def clean_old_webinars() -> None:
         payments = [await booking_payments.payment_for(participant) for participant in ready_participants]
         # The current hosting subject is access authority. Original agreed
         # remuneration belongs to the original financial recipient.
-        financial_groups = {}
+        financial_groups: dict[str, list[BookingPayment]] = {}
         for payment in payments:
             owner = payment.original["commercial_event"]["instructor_id"]
             financial_groups.setdefault(owner, []).append(payment)
