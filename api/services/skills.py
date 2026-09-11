@@ -51,3 +51,43 @@ async def get_lecturers(skill_id: str, level: int) -> set[str]:
 async def add_xp(user_id: str, skill_id: str, xp: int) -> None:
     async with InternalService.SKILLS.client as client:
         await client.post(f"/skills/{user_id}/{skill_id}", json={"xp": xp})
+
+
+async def apply_xp_benefit(operation: str, request: dict) -> dict:
+    """Only the exact committed receiver contract establishes a delivery result."""
+    import json
+    from urllib.parse import quote
+
+    from httpx import HTTPError
+
+    from api.services.internal import InternalServiceError
+
+    unknown = {"state": "uncertain", "reason": "Exact benefit receipt unavailable"}
+    try:
+        skill = quote(request["skill_id"], safe="")
+        async with InternalService.SKILLS.client as client:
+            client.event_hooks["response"] = []
+            response = await client.post(
+                f"/xp-operations/{operation}/{request['user_id']}/{skill}",
+                json={"xp": request["xp"], "earning_id": request["earning_id"]},
+                timeout=10,
+            )
+        if response.status_code == 409:
+            return {"state": "review", "reason": "Exact benefit payload conflict"}
+        if response.status_code != 200:
+            # In particular404 does not prove the recipient was erased.
+            return unknown
+        result = response.json()
+        if (
+            not isinstance(result, dict)
+            or result.get("operation_id") != operation
+            or json.dumps(result.get("request"), sort_keys=True) != json.dumps(request, sort_keys=True)
+            or not (
+                (result.get("state") == "applied" and result.get("applied") is True)
+                or (result.get("state") == "recipient_erased" and result.get("applied") is False)
+            )
+        ):
+            return unknown
+        return result
+    except (HTTPError, InternalServiceError, ValueError, TypeError, KeyError):
+        return unknown

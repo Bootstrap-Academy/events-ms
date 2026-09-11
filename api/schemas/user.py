@@ -29,7 +29,7 @@ class UserAccessToken(BaseModel):
         return User(id=self.uid, **self.data.dict())
 
     async def is_revoked(self) -> bool:
-        return bool(await auth_redis.exists(f"session_logout:{self.rt}"))
+        return bool(await auth_redis.exists(f"access_token_invalidated:{self.rt}"))
 
 
 class UserInfo(BaseModel):

@@ -63,7 +63,9 @@ async def delete_slot(slot_id: str, user_id: str = get_user(require_self_or_admi
     *Requirements:* **VERIFIED** and (**SELF** or **ADMIN**)
     """
 
-    slot = await db.get(models.Slot, user_id=user_id, id=slot_id)
+    slot = await db.first(
+        filter_by(models.Slot, user_id=user_id, id=slot_id).with_for_update().execution_options(populate_existing=True)
+    )
     if not slot:
         raise SlotNotFoundException
 
@@ -123,7 +125,9 @@ async def delete_weekly_slot(slot_id: str, user_id: str = get_user(require_self_
     if not slot:
         raise SlotNotFoundException
 
-    for s in [*slot.slots]:
+    for s in await db.all(
+        filter_by(models.Slot, weekly_slot_id=slot.id).with_for_update().execution_options(populate_existing=True)
+    ):
         if s.booked:
             s.weekly_slot = None
             s.weekly_slot_id = None

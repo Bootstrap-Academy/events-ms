@@ -4,18 +4,9 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import db
-from api.models import (
-    Coaching,
-    EmergencyCancel,
-    EventType,
-    Exam,
-    LecturerRating,
-    Slot,
-    Webinar,
-    WebinarParticipant,
-    WeeklySlot,
-)
+from api.models import Coaching, EmergencyCancel, EventType, Exam, LecturerRating, Slot, Webinar, WeeklySlot
 from api.services.user_export import export_user_data
+from tests.payment_fixtures import paid_participant, paid_slot
 
 
 USER = "40ab0e5c-b7ee-4a25-9d10-1eaf3c62d2bd"
@@ -41,7 +32,7 @@ def _webinar(webinar_id: str, creator: str) -> Webinar:
 
 
 def _slot(slot_id: str, user_id: str, booked_by: str | None) -> Slot:
-    return Slot(
+    return paid_slot(
         id=slot_id,
         user_id=user_id,
         start=START,
@@ -73,8 +64,8 @@ def _rating(rating_id: str, lecturer_id: str, participant_id: str | None) -> Lec
 async def data(session: AsyncSession) -> None:
     await db.add(_webinar("webinar-user", USER))
     await db.add(_webinar("webinar-other", OTHER))
-    await db.add(WebinarParticipant(webinar_id="webinar-user", user_id=OTHER, paid_coins=42))
-    await db.add(WebinarParticipant(webinar_id="webinar-other", user_id=USER, paid_coins=1337))
+    await db.add(paid_participant(webinar_id="webinar-user", user_id=OTHER, paid_coins=42))
+    await db.add(paid_participant(webinar_id="webinar-other", user_id=USER, paid_coins=1337))
 
     await db.add(WeeklySlot(id="weekly-user", user_id=USER, weekday=3, start=time(10), end=time(11), last_slot=START))
     await db.add(WeeklySlot(id="weekly-other", user_id=OTHER, weekday=4, start=time(12), end=time(13), last_slot=START))

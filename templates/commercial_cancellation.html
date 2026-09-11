@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<p>Die Stornierung wurde gespeichert. Vorgang: {{ reference }}.</p>
+{% if notice %}
+<p>{{ notice.title }} — {{ notice.start }} bis {{ notice.end }}.</p>
+<p>Umfang: {% if notice.scope == 'session' %}der angegebene Termin mit {{ notice.affected_orders }} ursprünglichen Buchungen{% else %}die angegebene einzelne Buchung{% endif %}.</p>
+<p>Eingang der Erklärung: {{ notice.received_at }}. Beleg: {{ notice.command_id }}.</p>
+<p>{% if notice.role == 'administrator' %}Eine administrative Stornierung wurde erklärt; sie ist keine Erklärung oder Verzichtserklärung der Lehrperson.{% elif notice.role == 'provider' %}Die Lehrperson hat die Stornierung erklärt.{% else %}Die Stornierung einer Teilnahme wurde erklärt.{% endif %}
+{% if notice.state == 'applied' %}Die ausgewählte Buchung beziehungsweise der ausgewählte Termin wurde aufgehoben.{% else %}Der ursprüngliche Termin ist nicht mehr verfügbar. Diese Verarbeitung hat keine aktuelle Buchung verändert. Die Ansprüche zu den ursprünglichen Bestellungen wurden gesondert erfasst.{% endif %}</p>
+{% endif %}
+<p>Ein bestehender Erstattungs- oder Vergütungsanspruch bleibt erhalten. Diese Nachricht bestätigt keine Zahlung und keine Gutschrift. Die Höhe, vorhandene Zahlungsnachweise und eine gegebenenfalls erforderliche Wahl der Erstattungsart werden getrennt bearbeitet.</p>
+<p>Du kannst den Stand und deine Unterlagen unter <a href="https://bootstrap.academy/ansprueche">bootstrap.academy/ansprueche</a> abrufen oder dich an hallo@bootstrap.academy wenden. Eine Kontolöschung lässt bestehende Ansprüche unberührt. Ursprüngliche Erklärungen und Fristen gelten weiter.</p>
+{% endblock %}

@@ -1,9 +1,11 @@
 """Endpoints related to the calendar."""
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Type, cast
+from uuid import UUID
 
-from fastapi import APIRouter, Path, Query
+from fastapi import APIRouter, HTTPException, Path, Query, Request
+from fastapi.routing import APIRoute
 from sqlalchemy import func
 from sqlalchemy.sql import Select
 from starlette.responses import Response
@@ -11,27 +13,35 @@ from starlette.responses import Response
 from api import models
 from api.auth import require_verified_email, user_auth
 from api.database import db, select
-from api.exceptions.auth import PermissionDeniedError, verified_responses
-from api.exceptions.slots import SlotNotFoundException
+from api.exceptions.auth import verified_responses
 from api.schemas.calendar import Calendar, CalendarToken, Coaching, EventType, Webinar
+from api.schemas.ordinary_cancellation import CancellationDeclaration, CancellationPreparation
 from api.schemas.user import User
-from api.services import shop
+from api.services import booking_contracts, booking_payments, ordinary_cancellations
 from api.services.auth import get_userinfo, is_admin
 from api.services.ics import create_ics
 from api.services.skills import get_skill_levels
 from api.settings import settings
-from api.utils.cache import clear_cache
-from api.utils.email import (
-    CANCELLED_COACHING,
-    CANCELLED_COACHING_LECTURER,
-    CANCELLED_WEBINAR,
-    CANCELLED_WEBINAR_LECTURER,
-    notify,
-)
-from api.utils.utc import datetime_link, utcfromtimestamp, utcnow
+from api.utils.utc import utcfromtimestamp, utcnow
 
 
-router = APIRouter()
+class CancellationReceiptRoute(APIRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+        if self.path != "/calendar/cancellations/{command_id}" or "POST" not in self.methods:
+            return handler
+
+        async def record_body_receipt(request: Request):
+            # Complete body arrival precedes awaited token/current-authority checks.
+            # FastAPI reuses these cached bytes and still validates the schema.
+            await request.body()
+            request.state.ordinary_declaration_received_at = utcnow()
+            return await handler(request)
+
+        return record_body_receipt
+
+
+router = APIRouter(route_class=CancellationReceiptRoute)
 
 
 def _filter_time(
@@ -79,10 +89,17 @@ async def get_webinars(
 
     webinar: models.Webinar
     async for webinar in await db.stream(query):
+        participation = next((p for p in webinar.participants if p.user_id == user_id), None)
+        payment = await booking_payments.payment_for(participation) if participation else None
         _booked = user_id == webinar.creator or any(
             participant.user_id == user_id for participant in webinar.participants
         )
-        _bookable = not _booked and utcnow() < webinar.start and len(webinar.participants) < webinar.max_participants
+        _bookable = (
+            not _booked
+            and not webinar.closed_to_new_bookings
+            and utcnow() < webinar.start
+            and len(webinar.participants) < webinar.max_participants
+        )
 
         events.append(
             Webinar(
@@ -93,11 +110,18 @@ async def get_webinars(
                 skill_id=webinar.skill_id,
                 start=int(webinar.start.timestamp()),
                 duration=int((webinar.end - webinar.start).total_seconds()) // 60,
-                price=webinar.price,
+                price=payment.paid_coins if payment else webinar.price,
+                payment_state=await booking_contracts.customer_state(payment),
                 admin_link=webinar.admin_link if admin or user_id == webinar.creator else None,
                 link=(
                     webinar.link
-                    if admin or user_id == webinar.creator or (_booked and webinar.start - utcnow() < timedelta(days=1))
+                    if admin
+                    or user_id == webinar.creator
+                    or (
+                        _booked
+                        and webinar.start - utcnow() < timedelta(days=1)
+                        and await booking_contracts.ready(payment)
+                    )
                     else None
                 ),
                 instructor=await get_userinfo(webinar.creator),
@@ -135,6 +159,7 @@ async def get_coachings(
     slot: models.Slot
     async for slot in await db.stream(query):
         if slot.booked:
+            payment = await booking_payments.payment_for(slot) if slot.payment_id else None
             events.append(
                 Coaching(
                     id=slot.id,
@@ -144,9 +169,16 @@ async def get_coachings(
                     skill_id=slot.skill_id,
                     start=int(slot.start.timestamp()),
                     duration=int((slot.end - slot.start).total_seconds()) // 60,
-                    price=cast(int, slot.student_coins),
+                    price=slot.student_coins,
+                    payment_state=await booking_contracts.customer_state(payment),
                     admin_link=slot.admin_link if admin or user_id == slot.user_id else None,
-                    link=slot.link if admin or user_id in (slot.user_id, slot.booked_by) else None,
+                    link=(
+                        slot.link
+                        if admin
+                        or user_id == slot.user_id
+                        or (user_id == slot.booked_by and await booking_contracts.ready(payment))
+                        else None
+                    ),
                     instructor=await get_userinfo(slot.user_id),
                     instructor_rating=await models.LecturerRating.get_rating(slot.user_id, slot.skill_id),
                     booked=True,
@@ -225,13 +257,13 @@ async def get_events(
 
     free = {ec.user_id async for ec in await db.stream(select(models.EmergencyCancel))}
     for event in events:
-        if event.instructor and event.instructor.id in free:
+        if event.bookable and event.instructor and event.instructor.id in free:
             event.price = 0
 
     f = iter(events)
     f = filter(lambda e: skill_id is None or skill_id == e.skill_id, f)
-    f = filter(lambda e: price_min is None or e.price >= price_min, f)
-    f = filter(lambda e: price_max is None or e.price <= price_max, f)
+    f = filter(lambda e: price_min is None or e.price is None or e.price >= price_min, f)
+    f = filter(lambda e: price_max is None or e.price is None or e.price <= price_max, f)
     f = filter(lambda e: booked is None or e.booked is booked, f)
     f = filter(lambda e: bookable is None or e.bookable is bookable, f)
 
@@ -320,170 +352,26 @@ async def download_ics(
     return Response(await create_ics(events), media_type="text/calendar")
 
 
-@router.delete(
-    "/calendar/{event_id}",
-    dependencies=[require_verified_email],
-    responses=verified_responses(bool, SlotNotFoundException, PermissionDeniedError),
-)
-async def cancel_event(event_id: str, user: User = user_auth) -> Any:
-    """
-    Cancel a webinar or coaching.
-
-    The user must either be the instructor or the participant, or an admin.
-
-    *Requirements:* **VERIFIED**
-    """
-
-    if await _try_cancel_webinar(event_id, user):
-        return True
-    if await _try_cancel_coaching(event_id, user):
-        return True
-    raise SlotNotFoundException
+@router.post("/calendar/{event_id}/cancellation-target", dependencies=[require_verified_email])
+async def prepare_cancellation(event_id: str, body: CancellationPreparation, user: User = user_auth) -> dict[str, Any]:
+    return await ordinary_cancellations.prepare(user, event_id, body)
 
 
-async def _try_cancel_webinar(event_id: str, user: User = user_auth) -> bool:
-    webinar = await db.get(models.Webinar, id=event_id)
-    if webinar is None:
-        return False
-
-    participant = next((p for p in webinar.participants if p.user_id == user.id), None)
-    if not user.admin and not participant and webinar.creator != user.id:
-        return False
-
-    delta = webinar.start - utcnow()
-
-    if delta < timedelta(0):
-        # cannot cancel events that have already started
-        raise PermissionDeniedError
-
-    if participant:
-        return await _cancel_webinar_registration(webinar, participant, delta)
-
-    return await _cancel_webinar(webinar)
-
-
-async def _cancel_webinar_registration(
-    webinar: models.Webinar, participant: models.WebinarParticipant, delta: timedelta
-) -> bool:
-    """
-    Cancel the registration of a single participant.
-
-    How much of what the participant paid is refunded depends on how far away the webinar is; the share that is not
-    refunded is credited to the lecturer, whose slot is blocked at such short notice. Both are computed from the
-    amount that was charged for this registration, not from the current price of the webinar, so a registration that
-    cost nothing pays out nothing.
-    """
-
-    if delta >= timedelta(days=7):
-        student_coins = participant.paid_coins
-        instructor_coins = 0
-    elif delta >= timedelta(days=1):
-        student_coins = participant.paid_coins // 2
-        instructor_coins = int(participant.paid_coins * (1 - settings.event_fee) // 2)
-    else:
-        raise PermissionDeniedError
-
-    if student_coins:
-        await shop.add_coins(participant.user_id, student_coins, f"Cancel webinar '{webinar.name}'", False)
-    if instructor_coins:
-        await shop.add_coins(webinar.creator, instructor_coins, f"Cancel webinar '{webinar.name}'", False)
-
-    user_id = participant.user_id
-    await db.delete(participant)
-    await clear_cache("calendar")
-
-    mail = _event_mail_args(webinar.start) | {"title": webinar.name}
-    await notify(CANCELLED_WEBINAR, user_id, **mail, by_lecturer=False, coins=student_coins)
-    await notify(CANCELLED_WEBINAR_LECTURER, webinar.creator, **mail, whole_event=False, coins=instructor_coins)
-
-    return True
-
-
-async def _cancel_webinar(webinar: models.Webinar) -> bool:
-    """
-    Cancel a whole webinar, either as its lecturer or as an admin.
-
-    The webinar does not take place, so every participant gets back exactly what they were charged for their
-    registration instead of being charged again. Refunding the price of the webinar instead would pay out coins for
-    a registration that was free.
-    """
-
-    mail = _event_mail_args(webinar.start) | {"title": webinar.name}
-
-    for participant in webinar.participants:
-        if participant.paid_coins:
-            await shop.add_coins(participant.user_id, participant.paid_coins, f"Cancel webinar '{webinar.name}'", False)
-        await notify(CANCELLED_WEBINAR, participant.user_id, **mail, by_lecturer=True, coins=participant.paid_coins)
-
-    if webinar.participants:
-        await models.EmergencyCancel.create(webinar.creator)
-
-    await notify(CANCELLED_WEBINAR_LECTURER, webinar.creator, **mail, whole_event=True, coins=0)
-
-    await db.delete(webinar)
-    await clear_cache("calendar")
-
-    return True
-
-
-async def _try_cancel_coaching(event_id: str, user: User = user_auth) -> bool:
-    slot = await db.get(models.Slot, id=event_id)
-    if not slot or not slot.booked_by or slot.instructor_coins is None or slot.student_coins is None:
-        return False
-
-    if user.id != slot.user_id and user.id != slot.booked_by and not user.admin:
-        return False
-
-    delta = slot.start - utcnow()
-    student_coins = instructor_coins = 0
-
-    if delta < timedelta(0):
-        # cannot cancel events that have already started
-        raise PermissionDeniedError
-
-    by_student = user.id == slot.booked_by
-    if by_student:
-        if delta >= timedelta(days=7):
-            student_coins = slot.student_coins
-        elif delta >= timedelta(days=1):
-            student_coins = slot.student_coins // 2
-            instructor_coins = slot.instructor_coins // 2
-        else:
-            raise PermissionDeniedError
-    else:
-        # the lecturer or an admin cancels an appointment the student still expected to take place
-        student_coins = slot.student_coins
-        if user.id == slot.user_id:
-            # a lecturer who cancels owes the next event; an admin cancelling for them does not trigger that
-            await models.EmergencyCancel.create(slot.user_id)
-
-    if student_coins:
-        await shop.add_coins(slot.booked_by, student_coins, "Cancel coaching", False)
-    if instructor_coins:
-        await shop.add_coins(slot.user_id, instructor_coins, "Cancel coaching", False)
-
-    student, lecturer = slot.booked_by, slot.user_id
-    mail = _event_mail_args(slot.start)
-    instructor = await get_userinfo(lecturer)
-
-    slot.cancel()
-
-    await clear_cache("calendar")
-
-    await notify(
-        CANCELLED_COACHING,
-        student,
-        **mail,
-        instructor=instructor.display_name if instructor else None,
-        by_lecturer=not by_student,
-        coins=student_coins,
+@router.post("/calendar/cancellations/{command_id}", dependencies=[require_verified_email])
+async def declare_cancellation(
+    command_id: UUID, body: CancellationDeclaration, request: Request, user: User = user_auth
+) -> dict[str, Any]:
+    return await ordinary_cancellations.receive(
+        user, str(command_id), body, received_at=request.state.ordinary_declaration_received_at
     )
-    await notify(CANCELLED_COACHING_LECTURER, lecturer, **mail, by_student=by_student, coins=instructor_coins)
-
-    return True
 
 
-def _event_mail_args(start: datetime) -> dict[str, Any]:
-    """Return the fields with which every event mail describes the date of the event."""
+@router.get("/calendar/cancellations/{command_id}", dependencies=[require_verified_email])
+async def cancellation_receipt(command_id: UUID, user: User = user_auth) -> dict[str, Any]:
+    return await ordinary_cancellations.status(user, str(command_id))
 
-    return {"date": start.strftime("%d.%m.%Y"), "time": start.strftime("%H:%M"), "datetime_link": datetime_link(start)}
+
+@router.delete("/calendar/{event_id}", dependencies=[require_verified_email])
+async def cancel_event(event_id: str, user: User = user_auth) -> Any:
+    # Old event-only retries cannot distinguish a replaced original order.
+    raise HTTPException(409, detail={"code": "ExactCancellationTargetRequired", "cancellation_recorded": False})

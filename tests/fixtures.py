@@ -21,7 +21,7 @@ async def database(monkeypatch: MonkeyPatch) -> None:
 @pytest.fixture
 async def session(database: None, monkeypatch: MonkeyPatch) -> AsyncIterator[AsyncSession]:
     # set the session as the default value of the context variable so that it is also visible in other tasks
-    db_session = AsyncSession(db.engine)
+    db_session = AsyncSession(db.engine, expire_on_commit=False)
     monkeypatch.setattr(db, "_session", ContextVar("session", default=db_session))
     yield db_session
     await db_session.close()
