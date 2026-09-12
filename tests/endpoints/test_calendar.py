@@ -315,7 +315,7 @@ async def test_active_generic_notice_and_handoff_keep_original_origin_and_financ
     if contact == "accepted":
         assert len(sent.await_args_list) == 2
         html = " ".join(sent.await_args_list[0].args[2].split())
-        assert command in html and "test webinar" in html and "keine Zahlung und keine Gutschrift" in html
+        assert command in html and "test webinar" in html and "möglichen Erstattung oder Vergütung" in html
         assert "50% Rückerstattung" not in html and "wieder gutgeschrieben" not in html
         await settlements.deliver([required(receipt.result)["batch_id"]])
         assert len(sent.await_args_list) == 2 and len(handoffs) == 1
