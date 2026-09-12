@@ -3,11 +3,12 @@
 from datetime import timedelta
 from typing import Any, cast
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from api import models
 from api.auth import require_verified_email, user_auth
 from api.database import db, filter_by
+from api.endpoints.closed_offerings import closed_offering
 from api.exceptions.auth import verified_responses
 from api.exceptions.coaching import CannotBookOwnCoachingError, CoachingNotFoundError, NotEnoughCoinsError
 from api.exceptions.skills import SkillRequirementsNotMetError
@@ -15,13 +16,12 @@ from api.models.slots import EventType
 from api.schemas import calendar
 from api.schemas.coachings import Coaching, UpdateCoaching
 from api.schemas.user import User
-from api.services import shop
+from api.services import booking_contracts, booking_payments, retained_events
 from api.services.auth import get_userinfo
 from api.services.skills import get_skill_levels
 from api.settings import settings
 from api.utils.cache import clear_cache
-from api.utils.email import BOOKED_COACHING, notify
-from api.utils.utc import datetime_link, utcnow
+from api.utils.utc import utcnow
 
 
 router = APIRouter()
@@ -29,26 +29,36 @@ router = APIRouter()
 
 @router.post(
     "/coachings/{skill_id}/{slot_id}",
-    dependencies=[require_verified_email],
+    dependencies=[closed_offering, require_verified_email],
     responses=verified_responses(
         calendar.Coaching, CoachingNotFoundError, NotEnoughCoinsError, CannotBookOwnCoachingError
     ),
+    deprecated=True,
 )
-async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> Any:
+async def book_coaching(data: booking_contracts.Acceptance, skill_id: str, slot_id: str, user: User = user_auth) -> Any:
     """
     Book a coaching session.
 
     *Requirements:* **VERIFIED**
     """
 
-    slot = await db.get(models.Slot, id=slot_id, booked_by=None)
-    if not slot or slot.start - utcnow() < timedelta(days=1):
+    await retained_events.require_current_subject(user.id)
+    slot = await db.first(
+        filter_by(models.Slot, id=slot_id).with_for_update().execution_options(populate_existing=True)
+    )
+    if slot and slot.booked_by == user.id and slot.payment_id:
+        payment = await booking_payments.payment_for(slot)
+        if str(data.order_id) == payment.id:
+            await booking_contracts.prepare(user.id, "coaching", slot, data, skill_id)
+            await booking_payments.finish(payment.id)
+            return await _booked_coaching(slot)
+    if not slot or slot.booked_by is not None or slot.start - utcnow() < timedelta(days=1):
         raise CoachingNotFoundError
 
     if slot.user_id == user.id:
         raise CannotBookOwnCoachingError
 
-    coaching = await db.get(models.Coaching, user_id=slot.user_id)
+    coaching = await db.get(models.Coaching, user_id=slot.user_id, skill_id=skill_id)
     if not coaching:
         raise CoachingNotFoundError
 
@@ -56,31 +66,28 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
     if not instructor:
         raise CoachingNotFoundError
 
-    # a lecturer who had to cancel an event owes their next booking, so this one is free and the debt is settled
-    if await models.EmergencyCancel.delete(slot.user_id):
-        paid_coins = 0
-    else:
-        paid_coins = coaching.price
-        if not await shop.spend_coins(user.id, paid_coins, "Coaching"):
-            raise NotEnoughCoinsError
-
-    # what the student was charged, not the price of the coaching: the refund and the lecturer's share are computed
-    # from these two amounts, so a booking that cost nothing must not be able to pay anything out
-    slot.book(user.id, EventType.COACHING, paid_coins, int(paid_coins * (1 - settings.event_fee)), skill_id)
+    contract = await booking_contracts.prepare(user.id, "coaching", slot, data, skill_id)
+    emergency = bool(contract.offer["product"]["facts"]["emergency_waiver"])
+    if emergency and not await models.EmergencyCancel.delete(slot.user_id):
+        raise HTTPException(409, "Emergency waiver unavailable; no booking was placed")
+    paid_coins = contract.offer["product"]["coins"]
+    payment = await booking_payments.reserve(
+        "coaching", slot.id, user.id, paid_coins, "Coaching", emergency, payment_id=contract.id
+    )
+    slot.book(user.id, EventType.COACHING, 0, 0, skill_id)
+    slot.payment_id = payment.id
+    slot.student_coins = payment.paid_coins
+    slot.instructor_coins = payment.payout_coins
+    await retained_events.record_booking_reservation(payment)
+    await booking_payments.finish(payment.id)
 
     await clear_cache("calendar")
 
-    await notify(
-        BOOKED_COACHING,
-        user.id,
-        instructor=instructor.display_name,
-        date=slot.start.strftime("%d.%m.%Y"),
-        time=slot.start.strftime("%H:%M"),
-        datetime_link=datetime_link(slot.start),
-        link=slot.link,
-        coins=paid_coins,
-    )
+    return await _booked_coaching(slot)
 
+
+async def _booked_coaching(slot: models.Slot) -> calendar.Coaching:
+    payment = await booking_payments.payment_for(slot)
     return calendar.Coaching(
         id=slot.id,
         type=calendar.EventType.COACHING,
@@ -89,9 +96,10 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
         skill_id=slot.skill_id,
         start=int(slot.start.timestamp()),
         duration=int((slot.end - slot.start).total_seconds()) // 60,
-        price=cast(int, slot.student_coins),
+        price=slot.student_coins,
+        payment_state=await booking_contracts.customer_state(payment),
         admin_link=None,
-        link=slot.link,
+        link=slot.link if await booking_contracts.ready(payment) else None,
         instructor=await get_userinfo(slot.user_id),
         instructor_rating=await models.LecturerRating.get_rating(slot.user_id, slot.skill_id),
         booked=True,
@@ -100,7 +108,12 @@ async def book_coaching(skill_id: str, slot_id: str, user: User = user_auth) -> 
     )
 
 
-@router.get("/coachings", dependencies=[require_verified_email], responses=verified_responses(list[Coaching]))
+@router.get(
+    "/coachings",
+    dependencies=[closed_offering, require_verified_email],
+    responses=verified_responses(list[Coaching]),
+    deprecated=True,
+)
 async def get_coachings(user: User = user_auth) -> Any:
     """
     Return a list of all coaching configurations for an instructor.
@@ -116,8 +129,9 @@ async def get_coachings(user: User = user_auth) -> Any:
 
 @router.put(
     "/coachings/{skill_id}",
-    dependencies=[require_verified_email],
+    dependencies=[closed_offering, require_verified_email],
     responses=verified_responses(Coaching, SkillRequirementsNotMetError),
+    deprecated=True,
 )
 async def set_coaching(data: UpdateCoaching, skill_id: str, user: User = user_auth) -> Any:
     """
@@ -161,3 +175,21 @@ async def delete_coaching(skill_id: str, user: User = user_auth) -> Any:
     await clear_cache("calendar")
 
     return True
+
+
+@router.post(
+    "/coachings/{skill_id}/{slot_id}/offer", dependencies=[closed_offering, require_verified_email], deprecated=True
+)
+async def coaching_offer(skill_id: str, slot_id: str, user: User = user_auth) -> Any:
+    await retained_events.require_current_subject(user.id)
+    slot = await db.first(
+        filter_by(models.Slot, id=slot_id).with_for_update().execution_options(populate_existing=True)
+    )
+    if (
+        slot is None
+        or slot.booked_by is not None
+        or slot.start - utcnow() < timedelta(days=1)
+        or slot.user_id == user.id
+    ):
+        raise CoachingNotFoundError
+    return await booking_contracts.offer(user.id, "coaching", slot, skill_id)

@@ -325,7 +325,7 @@ async def test__create_session(mocker: MockerFixture) -> None:
 
     result = database.database.DB.create_session(db)
 
-    async_session_patch.assert_called_once_with(db.engine)
+    async_session_patch.assert_called_once_with(db.engine, expire_on_commit=False)
     db._session.set.assert_called_with(async_session_patch())
     event_patch.assert_called_once_with()
     db._close_event.set.assert_called_with(event_patch())
@@ -374,6 +374,7 @@ async def test__get_database(mocker: MockerFixture, monkeypatch: MonkeyPatch) ->
 
     db_patch.assert_called_once_with(
         url=url_patch,
+        reserve_committed_reader=True,
         pool_pre_ping=True,
         pool_recycle=pool_recycle_patch,
         pool_size=pool_size_patch,

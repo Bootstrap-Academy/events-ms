@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block heading %}Information zu einer Stornierung{% endblock %}
+{% block content %}
+<p>Hallo,</p>
+{% if notice %}
+  {% if notice.state == 'applied' %}
+    <p>{% if notice.scope == 'session' %}Der Termin{% else %}Eine Buchung für{% endif %}
+      „{{ notice.title }}“ am {{ notice.start | event_time }}
+      {% if notice.scope == 'session' %}wurde abgesagt{% else %}wurde storniert{% endif %}.</p>
+  {% else %}
+    <p>Die Stornierung für „{{ notice.title }}“ am {{ notice.start | event_time }} ist angekommen.
+      Der ursprüngliche Termin ist nicht mehr verfügbar.</p>
+  {% endif %}
+{% else %}
+  <p>Eine Stornierung wurde gespeichert. Die betroffene Buchung findest du in den Details.</p>
+{% endif %}
+<p>Details zur Stornierung und zu einer möglichen Erstattung oder Vergütung findest du unter
+  <a href="https://bootstrap.academy/ansprueche">Deine Ansprüche</a>.
+  Bei Fragen schreib uns an <a href="mailto:hallo@bootstrap.academy">hallo@bootstrap.academy</a>.</p>
+<p>Referenz für Rückfragen: {% if notice %}{{ notice.command_id }}{% else %}{{ reference }}{% endif %}</p>
+{% endblock %}
+{% block closing %}<p>Viele Grüße<br />Dein Bootstrap-Academy-Team</p>{% endblock %}

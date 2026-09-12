@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from .exceptions.auth import EmailNotVerifiedError, InvalidTokenError, PermissionDeniedError, UserNotFoundError
 from .schemas.user import User, UserAccessToken
-from .services.auth import exists_user
+from .services.auth import exists_user, ordinary_authority
 from .settings import settings
 from .utils.jwt import decode_jwt
 
@@ -61,16 +61,22 @@ internal_auth = Depends(InternalAuth(INTERNAL_AUDIENCE))
 
 
 @Depends
-async def public_auth(data: dict[Any, Any] = jwt_auth) -> User | None:
+async def public_auth(request: Request, data: dict[Any, Any] = jwt_auth) -> User | None:
     try:
         token: UserAccessToken = UserAccessToken.parse_obj(data)
     except (InvalidTokenError, ValidationError):
         return None
 
-    if await token.is_revoked():
+    try:
+        revoked = await token.is_revoked()
+    except Exception as exc:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=503, detail="Current ordinary authority could not be checked") from exc
+    if revoked:
         return None
 
-    return token.to_user()
+    return await ordinary_authority(get_token(request), token.uid)
 
 
 @Depends

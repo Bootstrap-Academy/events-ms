@@ -146,3 +146,7 @@ Setup the run configuration:
 - Change the working directory to root path  ➔ `Edit Configurations`  ➔ `Working directory`
 - In the `EnvFile` tab add your `.env` file
 - Confirm with `OK`
+
+Booking amounts, pending cancellations and legacy reconciliation are documented in
+[Payment reconciliation](docs/PAYMENT-RECONCILIATION.md). Unknown historical amounts
+are retained as unresolved claims and must not be replaced with current event prices.

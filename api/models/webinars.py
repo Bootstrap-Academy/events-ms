@@ -3,19 +3,20 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, Column, Integer, String
+from sqlalchemy import BigInteger, Boolean, Column, Integer, String, false
 from sqlalchemy.orm import Mapped, relationship
 
 from .emergency_cancel import EmergencyCancel
 from .lecturer_rating import LecturerRating
 from ..database.database import UTCDateTime
 from ..schemas import calendar
-from ..services import shop
+from ..services import benefits, booking_contracts, booking_payments, commercial, payment_claims, settlements
 from ..services.auth import get_userinfo
-from ..services.skills import add_xp
 from ..settings import settings
 from ..utils.utc import utcnow
 from api.database import Base, db, db_wrapper, select
+from api.models.booking_contract import BookingContract
+from api.models.booking_payment import BookingPayment
 
 
 if TYPE_CHECKING:
@@ -35,6 +36,8 @@ class Webinar(Base):
     link: Mapped[str] = Column(String(256))
     start: Mapped[datetime] = Column(UTCDateTime)
     end: Mapped[datetime] = Column(UTCDateTime)
+    closed_to_new_bookings: Mapped[bool] = Column(Boolean, nullable=False, default=False, server_default=false())
+    xp_delivery_protocol: Mapped[int | None] = Column(Integer, nullable=True)
     max_participants: Mapped[int] = Column(Integer)
     price: Mapped[int] = Column(BigInteger)
     participants: list[WebinarParticipant] = relationship(
@@ -65,18 +68,41 @@ class Webinar(Base):
 
 @db_wrapper
 async def clean_old_webinars() -> None:
+    batch = await settlements.new_batch("payout")
     webinar: Webinar
-    async for webinar in await db.stream(select(Webinar, Webinar.participants).where(Webinar.end < utcnow())):
+    async for webinar in await db.stream(
+        select(Webinar, Webinar.participants)
+        .where(Webinar.end < utcnow())
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ):
+        ready_participants = []
         for participant in webinar.participants:
+            payment = await booking_payments.payment_for(participant)
+            if await commercial.cleanup_claims(payment, webinar, webinar.creator, batch.id):
+                await booking_contracts.close(payment)
+                continue
+            if not await booking_contracts.ready(payment):
+                contract = await db.get(BookingContract, id=payment.id)
+                if contract is not None:
+                    contract.state = "review"
+                continue
+            ready_participants.append(participant)
             await LecturerRating.create(
                 webinar.creator, participant.user_id, webinar.skill_id, webinar.start, webinar.name
             )
-            await add_xp(participant.user_id, webinar.skill_id, settings.webinar_participant_xp)
-        # the lecturer's share is computed from what the participants were charged, not from the price of the
-        # webinar, so a registration that was free pays out nothing
-        paid = sum(participant.paid_coins for participant in webinar.participants)
-        await shop.add_coins(webinar.creator, int(paid * (1 - settings.event_fee)), "Webinar", True)
-        if webinar.participants:
+            await benefits.record(webinar, payment, "participant", participant.user_id, settings.webinar_participant_xp)
+        payments = [await booking_payments.payment_for(participant) for participant in ready_participants]
+        # The current hosting subject is access authority. Original agreed
+        # remuneration belongs to the original financial recipient.
+        financial_groups: dict[str, list[BookingPayment]] = {}
+        for payment in payments:
+            owner = payment.original["commercial_event"]["instructor_id"]
+            financial_groups.setdefault(owner, []).append(payment)
+        for owner, group in sorted(financial_groups.items()):
+            await payment_claims.credit(batch.id, webinar.id, owner, group, "Webinar", True, field="payout_coins")
+        if ready_participants:
             await EmergencyCancel.delete(webinar.creator)
-        await add_xp(webinar.creator, webinar.skill_id, settings.webinar_lecturer_xp)
+            await benefits.record(webinar, payments[0], "instructor", webinar.creator, settings.webinar_lecturer_xp)
         await db.delete(webinar)
+    await settlements.finish([batch.id])

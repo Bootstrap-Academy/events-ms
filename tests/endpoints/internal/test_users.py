@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.database import db, select
 from api.models import Coaching
 from api.utils.jwt import encode_jwt
+from tests.services.test_user_deletion import CommercialResponses, canonical_erasure
 
 
 USER = "40ab0e5c-b7ee-4a25-9d10-1eaf3c62d2bd"
@@ -23,7 +24,9 @@ def _internal_token() -> str:
     return encode_jwt({"aud": "events"}, timedelta(seconds=10))
 
 
-async def test__delete_user(client: AsyncClient, session: AsyncSession) -> None:
+async def test__delete_user(client: AsyncClient, session: AsyncSession, mocker: MockerFixture) -> None:
+    remote = CommercialResponses(receipts={USER: canonical_erasure(USER)})
+    mocker.patch("api.services.shop.commercial", side_effect=remote.__call__)
     await db.add(Coaching(user_id=USER, skill_id="test", price=42))
     await db.add(Coaching(user_id="other", skill_id="test", price=42))
 
@@ -34,7 +37,9 @@ async def test__delete_user(client: AsyncClient, session: AsyncSession) -> None:
     assert [c.user_id for c in await db.all(select(Coaching))] == ["other"]
 
 
-async def test__delete_user__unknown_user(client: AsyncClient, session: AsyncSession) -> None:
+async def test__delete_user__unknown_user(client: AsyncClient, session: AsyncSession, mocker: MockerFixture) -> None:
+    remote = CommercialResponses(receipts={"unknown": canonical_erasure("unknown")})
+    mocker.patch("api.services.shop.commercial", side_effect=remote.__call__)
     await db.add(Coaching(user_id="other", skill_id="test", price=42))
 
     response = await client.delete("/_internal/users/unknown", headers={"Authorization": _internal_token()})
@@ -92,3 +97,16 @@ async def test__export_user__wrong_audience(client: AsyncClient, session: AsyncS
     response = await client.get(f"/_internal/users/{USER}/export", headers={"Authorization": token})
 
     assert response.status_code == 401
+
+
+async def test__delete_user__missing_canonical_receipt_is_pending_json(
+    client: AsyncClient, session: AsyncSession, mocker: MockerFixture
+) -> None:
+    remote = CommercialResponses()
+    mocker.patch("api.services.shop.commercial", side_effect=remote.__call__)
+    await db.add(Coaching(user_id=USER, skill_id="test", price=42))
+    response = await client.delete(f"/_internal/users/{USER}", headers={"Authorization": _internal_token()})
+    assert response.status_code == 503
+    assert response.json() == {"detail": {"code": "CommercialInventoryPending", "erasure_committed": True}}
+    assert await db.all(select(Coaching)) == []
+    assert remote.bodies("inventory") == []
