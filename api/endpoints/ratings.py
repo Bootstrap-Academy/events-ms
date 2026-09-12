@@ -7,6 +7,7 @@ from fastapi import APIRouter, Body
 from api import models
 from api.auth import get_user, require_verified_email, user_auth
 from api.database import db
+from api.endpoints.closed_offerings import closed_offering
 from api.exceptions.auth import admin_responses, verified_responses
 from api.exceptions.ratings import CouldNotSendMessageError, RatingNotFoundError
 from api.schemas.ratings import Unrated
@@ -30,7 +31,12 @@ async def get_rating(skill_id: str, user_id: str = get_user(require_self_or_admi
     return await models.LecturerRating.get_rating(user_id, skill_id)
 
 
-@router.get("/unrated", dependencies=[require_verified_email], responses=verified_responses(list[Unrated]))
+@router.get(
+    "/unrated",
+    dependencies=[closed_offering, require_verified_email],
+    responses=verified_responses(list[Unrated]),
+    deprecated=True,
+)
 async def list_unrated(user: User = user_auth) -> Any:
     """Return a list of unrated webinars."""
 
@@ -47,7 +53,10 @@ async def list_unrated(user: User = user_auth) -> Any:
 
 
 @router.post(
-    "/rate/{rating_id}", dependencies=[require_verified_email], responses=verified_responses(bool, RatingNotFoundError)
+    "/rate/{rating_id}",
+    dependencies=[closed_offering, require_verified_email],
+    responses=verified_responses(bool, RatingNotFoundError),
+    deprecated=True,
 )
 async def rate_lecturer(rating_id: str, rating: int = Body(embed=True, ge=1, le=5), user: User = user_auth) -> Any:
     """Rate a lecturer."""

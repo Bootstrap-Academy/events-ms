@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from api import models
 from api.auth import require_verified_email, user_auth
 from api.database import db, filter_by
+from api.endpoints.closed_offerings import closed_offering
 from api.exceptions.auth import PermissionDeniedError, verified_responses
 from api.exceptions.coaching import NotEnoughCoinsError
 from api.exceptions.skills import SkillRequirementsNotMetError
@@ -62,10 +63,11 @@ async def check_price(user_id: str, skill_id: str, price: int, max_participants:
 
 @router.post(
     "/webinars",
-    dependencies=[require_verified_email],
+    dependencies=[closed_offering, require_verified_email],
     responses=verified_responses(
         Webinar, SkillRequirementsNotMetError, CannotStartInPastError, InsufficientRatingError
     ),
+    deprecated=True,
 )
 async def create_webinar(data: CreateWebinar, user: User = user_auth) -> Any:
     """
@@ -123,12 +125,8 @@ async def get_webinar_by_id(webinar: models.Webinar = get_webinar, user: User = 
     """
 
     _booked = user.id == webinar.creator or any(participant.user_id == user.id for participant in webinar.participants)
-    _bookable = (
-        not _booked
-        and not webinar.closed_to_new_bookings
-        and utcnow() < webinar.start
-        and len(webinar.participants) < webinar.max_participants
-    )
+    # Existing bookings remain readable; this is no longer a public offer.
+    _bookable = False
     include_link = (
         user.admin or user.id == webinar.creator or (_booked and webinar.start - utcnow() < timedelta(days=1))
     )
@@ -160,10 +158,11 @@ async def list_webinar_participants(webinar: models.Webinar = get_webinar) -> An
 
 @router.post(
     "/webinars/{webinar_id}/participants",
-    dependencies=[require_verified_email],
+    dependencies=[closed_offering, require_verified_email],
     responses=verified_responses(
         Webinar, WebinarNotFoundError, AlreadyRegisteredError, AlreadyFullError, NotEnoughCoinsError
     ),
+    deprecated=True,
 )
 async def register_for_webinar(
     data: booking_contracts.Acceptance, webinar: models.Webinar = get_webinar, user: User = user_auth
@@ -232,8 +231,9 @@ async def register_for_webinar(
 
 @router.patch(
     "/webinars/{webinar_id}",
-    dependencies=[require_verified_email, can_manage_webinar],
+    dependencies=[closed_offering, require_verified_email, can_manage_webinar],
     responses=verified_responses(Webinar, WebinarNotFoundError, PermissionDeniedError, CannotStartInPastError),
+    deprecated=True,
 )
 async def update_webinar(data: UpdateWebinar, user: User = user_auth, webinar: models.Webinar = get_webinar) -> Any:
     """
@@ -297,7 +297,7 @@ async def update_webinar(data: UpdateWebinar, user: User = user_auth, webinar: m
     return await webinar.serialize(True, True, True, False)
 
 
-@router.post("/webinars/{webinar_id}/offer", dependencies=[require_verified_email])
+@router.post("/webinars/{webinar_id}/offer", dependencies=[closed_offering, require_verified_email], deprecated=True)
 async def webinar_offer(webinar: models.Webinar = get_webinar, user: User = user_auth) -> Any:
     await retained_events.require_current_subject(user.id)
     locked = await db.first(

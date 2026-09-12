@@ -136,7 +136,6 @@ async def clean_old_slots() -> None:
             await benefits.record(slot, payment, "participant", slot.booked_by, settings.coaching_participant_xp)
         await db.delete(slot)
 
-    weekly_slot: WeeklySlot
-    async for weekly_slot in await db.stream(select(WeeklySlot)):
-        await weekly_slot.create_slots()
+    # Recurring rules remain available to export/deletion, but no longer
+    # produce new availability after coaching has left the product.
     await settlements.finish([batch.id])
