@@ -217,21 +217,14 @@ async def test_mounted_scoped_host_reads_agree_after_exact_contract_review(
     await db.commit()
     app.dependency_overrides[learning.learning_auth] = lambda: User(id=THIRD, email_verified=True, admin=False)
     try:
-        paths = ("/learning/events", "/learning/calendar", f"/learning/webinars/{event.id}")
+        paths = ("/learning/events", f"/learning/webinars/{event.id}")
+        assert (await client.get("/learning/calendar")).status_code == 410
         for expected in (True, False):
             for path in paths:
                 response = await client.get(path)
                 assert response.status_code == 200
                 value = response.json()
-                row = (
-                    value[0]
-                    if path.endswith("/events")
-                    else (
-                        next(row for row in value["events"] if row["id"] == event.id)
-                        if path.endswith("/calendar")
-                        else value
-                    )
-                )
+                row = value[0] if path.endswith("/events") else value
                 assert (row["link"] is not None) == expected
                 if "admin_link" in row:
                     assert (row["admin_link"] is not None) == expected

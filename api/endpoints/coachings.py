@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from api import models
 from api.auth import require_verified_email, user_auth
 from api.database import db, filter_by
+from api.endpoints.closed_offerings import closed_offering
 from api.exceptions.auth import verified_responses
 from api.exceptions.coaching import CannotBookOwnCoachingError, CoachingNotFoundError, NotEnoughCoinsError
 from api.exceptions.skills import SkillRequirementsNotMetError
@@ -28,10 +29,11 @@ router = APIRouter()
 
 @router.post(
     "/coachings/{skill_id}/{slot_id}",
-    dependencies=[require_verified_email],
+    dependencies=[closed_offering, require_verified_email],
     responses=verified_responses(
         calendar.Coaching, CoachingNotFoundError, NotEnoughCoinsError, CannotBookOwnCoachingError
     ),
+    deprecated=True,
 )
 async def book_coaching(data: booking_contracts.Acceptance, skill_id: str, slot_id: str, user: User = user_auth) -> Any:
     """
@@ -106,7 +108,12 @@ async def _booked_coaching(slot: models.Slot) -> calendar.Coaching:
     )
 
 
-@router.get("/coachings", dependencies=[require_verified_email], responses=verified_responses(list[Coaching]))
+@router.get(
+    "/coachings",
+    dependencies=[closed_offering, require_verified_email],
+    responses=verified_responses(list[Coaching]),
+    deprecated=True,
+)
 async def get_coachings(user: User = user_auth) -> Any:
     """
     Return a list of all coaching configurations for an instructor.
@@ -122,8 +129,9 @@ async def get_coachings(user: User = user_auth) -> Any:
 
 @router.put(
     "/coachings/{skill_id}",
-    dependencies=[require_verified_email],
+    dependencies=[closed_offering, require_verified_email],
     responses=verified_responses(Coaching, SkillRequirementsNotMetError),
+    deprecated=True,
 )
 async def set_coaching(data: UpdateCoaching, skill_id: str, user: User = user_auth) -> Any:
     """
@@ -169,7 +177,9 @@ async def delete_coaching(skill_id: str, user: User = user_auth) -> Any:
     return True
 
 
-@router.post("/coachings/{skill_id}/{slot_id}/offer", dependencies=[require_verified_email])
+@router.post(
+    "/coachings/{skill_id}/{slot_id}/offer", dependencies=[closed_offering, require_verified_email], deprecated=True
+)
 async def coaching_offer(skill_id: str, slot_id: str, user: User = user_auth) -> Any:
     await retained_events.require_current_subject(user.id)
     slot = await db.first(

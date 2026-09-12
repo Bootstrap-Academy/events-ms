@@ -13,6 +13,7 @@ from starlette.responses import Response
 from api import models
 from api.auth import require_verified_email, user_auth
 from api.database import db, select
+from api.endpoints.closed_offerings import closed_calendar
 from api.exceptions.auth import verified_responses
 from api.schemas.calendar import Calendar, CalendarToken, Coaching, EventType, Webinar
 from api.schemas.ordinary_cancellation import CancellationDeclaration, CancellationPreparation
@@ -270,7 +271,12 @@ async def get_events(
     return [*f]
 
 
-@router.get("/calendar", dependencies=[require_verified_email], responses=verified_responses(Calendar))
+@router.get(
+    "/calendar",
+    dependencies=[closed_calendar, require_verified_email],
+    responses=verified_responses(Calendar),
+    deprecated=True,
+)
 async def get_calendar(
     type_: EventType | None = Query(None, alias="type", description="Return only events of this type"),
     title: str | None = Query(None, description="Return only events with this title"),
@@ -315,7 +321,10 @@ async def get_calendar(
 
 
 @router.post(
-    "/calendar/token/rotate", dependencies=[require_verified_email], responses=verified_responses(CalendarToken)
+    "/calendar/token/rotate",
+    dependencies=[closed_calendar, require_verified_email],
+    responses=verified_responses(CalendarToken),
+    deprecated=True,
 )
 async def rotate_ics_token(user: User = user_auth) -> Any:
     """
@@ -329,7 +338,7 @@ async def rotate_ics_token(user: User = user_auth) -> Any:
     return CalendarToken(ics_token=(await models.CalendarToken.rotate(user.id)).token)
 
 
-@router.get("/calendar/{token}/academy.ics")
+@router.get("/calendar/{token}/academy.ics", dependencies=[closed_calendar], deprecated=True)
 async def download_ics(
     type_: EventType | None = Query(None, alias="type", description="Return only events of this type"),
     skill_id: str | None = Query(None, description="Return only events with this skill id"),

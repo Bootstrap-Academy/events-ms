@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body
 from api import models
 from api.auth import get_user, require_verified_email
 from api.database import db, filter_by
+from api.endpoints.closed_offerings import closed_offering
 from api.exceptions.auth import admin_responses
 from api.exceptions.slots import SlotBookedException, SlotNotFoundException
 from api.schemas.slots import CreateSlot, CreateWeeklySlot, Slot, WeeklySlot
@@ -16,7 +17,12 @@ from api.utils.utc import utcfromtimestamp, utcnow
 router = APIRouter()
 
 
-@router.get("/slots/{user_id}", dependencies=[require_verified_email], responses=admin_responses(list[Slot]))
+@router.get(
+    "/slots/{user_id}",
+    dependencies=[closed_offering, require_verified_email],
+    responses=admin_responses(list[Slot]),
+    deprecated=True,
+)
 async def get_slots(user_id: str = get_user(require_self_or_admin=True)) -> Any:
     """
     Return the available slots for the user.
@@ -27,7 +33,12 @@ async def get_slots(user_id: str = get_user(require_self_or_admin=True)) -> Any:
     return [slot.serialize async for slot in await db.stream(filter_by(models.Slot, user_id=user_id))]
 
 
-@router.post("/slots/{user_id}", dependencies=[require_verified_email], responses=admin_responses(list[Slot]))
+@router.post(
+    "/slots/{user_id}",
+    dependencies=[closed_offering, require_verified_email],
+    responses=admin_responses(list[Slot]),
+    deprecated=True,
+)
 async def add_slots(
     slots: list[CreateSlot] = Body(embed=True), user_id: str = get_user(require_self_or_admin=True)
 ) -> Any:
@@ -80,7 +91,10 @@ async def delete_slot(slot_id: str, user_id: str = get_user(require_self_or_admi
 
 
 @router.get(
-    "/slots/{user_id}/weekly", dependencies=[require_verified_email], responses=admin_responses(list[WeeklySlot])
+    "/slots/{user_id}/weekly",
+    dependencies=[closed_offering, require_verified_email],
+    responses=admin_responses(list[WeeklySlot]),
+    deprecated=True,
 )
 async def get_weekly_slots(user_id: str = get_user(require_self_or_admin=True)) -> Any:
     """
@@ -92,7 +106,12 @@ async def get_weekly_slots(user_id: str = get_user(require_self_or_admin=True)) 
     return [slot.serialize for slot in await db.all(filter_by(models.WeeklySlot, user_id=user_id))]
 
 
-@router.post("/slots/{user_id}/weekly", dependencies=[require_verified_email], responses=admin_responses(WeeklySlot))
+@router.post(
+    "/slots/{user_id}/weekly",
+    dependencies=[closed_offering, require_verified_email],
+    responses=admin_responses(WeeklySlot),
+    deprecated=True,
+)
 async def add_weekly_slot(data: CreateWeeklySlot, user_id: str = get_user(require_self_or_admin=True)) -> Any:
     """
     Add a rule for creating slots on a weekly basis for the user.

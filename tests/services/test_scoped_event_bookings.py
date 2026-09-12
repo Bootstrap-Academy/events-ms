@@ -87,7 +87,7 @@ async def test_wrong_exact_offer_still_has_no_booking_or_debit(session: AsyncSes
     spend_coins.assert_not_awaited()
 
 
-async def test_scoped_route_mounting_body_and_path_use_existing_booking_pipeline(
+async def test_scoped_routes_no_longer_allow_new_offers_or_bookings(
     session: AsyncSession, client: AsyncClient, spend_coins: AsyncMock
 ) -> None:
     from api.app import app
@@ -98,21 +98,21 @@ async def test_scoped_route_mounting_body_and_path_use_existing_booking_pipeline
     app.dependency_overrides[learning.learning_auth] = lambda: _user(STUDENT)
     try:
         offered = await client.post(f"/learning/webinars/{event.id}/offer")
-        assert offered.status_code == 200
-        offer = offered.json()["offer"]
+        assert offered.status_code == 410
         response = await client.post(
             f"/learning/webinars/{event.id}/participants",
             json={
-                "order_id": offer["id"],
-                "offer_hash": offer["hash"],
+                "order_id": str(uuid4()),
+                "offer_hash": "old-offer",
                 "accepted": True,
                 "early_performance_requested": True,
             },
         )
-        assert response.status_code == 200 and response.json()["booked"] is True
-        assert spend_coins.await_count == 1
-        parameters = app.openapi()["paths"]["/learning/webinars/{webinar_id}/participants"]["post"]["parameters"]
-        assert next(p for p in parameters if p["name"] == "webinar_id")["in"] == "path"
+        assert response.status_code == 410
+        assert await db.all(select(BookingPayment)) == []
+        assert await db.all(select(WebinarParticipant)) == []
+        spend_coins.assert_not_awaited()
+        assert await db.get(type(event), id=event.id) is event
     finally:
         del app.dependency_overrides[learning.learning_auth]
 

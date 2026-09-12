@@ -10,6 +10,7 @@ from fastapi.security import APIKeyHeader
 from httpx import HTTPError
 
 from api.database import db, filter_by
+from api.endpoints.closed_offerings import closed_calendar, closed_offering
 from api.models import BookingPayment, EventRightGrant, RetainedEventRight, Slot, Webinar, WebinarParticipant
 from api.schemas.user import User
 from api.services import booking_contracts, retained_events
@@ -143,7 +144,7 @@ async def get_event(event_id: UUID, user: User = Depends(learning_auth)) -> list
     return result
 
 
-@router.get("/calendar")
+@router.get("/calendar", dependencies=[closed_calendar], deprecated=True)
 async def calendar(user: User = Depends(learning_auth)) -> dict[str, Any]:
     from api.endpoints.calendar import get_events
 
@@ -188,7 +189,7 @@ async def webinar(webinar_id: UUID, user: User = Depends(learning_auth)) -> Any:
     return response
 
 
-@router.post("/webinars/{webinar_id}/offer")
+@router.post("/webinars/{webinar_id}/offer", dependencies=[closed_offering], deprecated=True)
 async def webinar_offer(webinar_id: UUID, user: User = Depends(learning_auth)) -> Any:
     from api.endpoints import webinars
 
@@ -196,7 +197,7 @@ async def webinar_offer(webinar_id: UUID, user: User = Depends(learning_auth)) -
     return await webinars.webinar_offer(event, user)
 
 
-@router.post("/webinars/{webinar_id}/participants")
+@router.post("/webinars/{webinar_id}/participants", dependencies=[closed_offering], deprecated=True)
 async def book_webinar(
     data: booking_contracts.Acceptance, webinar_id: UUID, user: User = Depends(learning_auth)
 ) -> Any:
@@ -207,14 +208,14 @@ async def book_webinar(
     return await webinars.register_for_webinar(data, event, user)
 
 
-@router.post("/coachings/{skill_id}/{slot_id}/offer")
+@router.post("/coachings/{skill_id}/{slot_id}/offer", dependencies=[closed_offering], deprecated=True)
 async def coaching_offer(skill_id: str, slot_id: UUID, user: User = Depends(learning_auth)) -> Any:
     from api.endpoints import coachings
 
     return await coachings.coaching_offer(skill_id, str(slot_id), user)
 
 
-@router.post("/coachings/{skill_id}/{slot_id}")
+@router.post("/coachings/{skill_id}/{slot_id}", dependencies=[closed_offering], deprecated=True)
 async def book_coaching(
     data: booking_contracts.Acceptance, skill_id: str, slot_id: UUID, user: User = Depends(learning_auth)
 ) -> Any:
