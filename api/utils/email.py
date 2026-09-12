@@ -2,6 +2,7 @@ import random
 import string
 from base64 import b64encode
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -28,6 +29,21 @@ env = Environment(loader=FileSystemLoader(TEMPLATES), autoescape=True)
 # host: rendering a message must not cause any request and therefore must not
 # be able to disclose the recipient's IP address.
 env.globals["logo_base64"] = b64encode((TEMPLATES / "logo-text.png").read_bytes()).decode()
+
+
+def readable_event_time(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return value
+    if parsed.tzinfo is None:
+        return value
+    parsed = parsed.astimezone(timezone.utc)
+    clock = "%H:%M:%S" if parsed.second or parsed.microsecond else "%H:%M"
+    return parsed.strftime(f"%d.%m.%Y um {clock} Uhr (UTC)")
+
+
+env.filters["event_time"] = readable_event_time
 
 
 @dataclass
@@ -70,7 +86,7 @@ CANCELLED_COACHING_LECTURER = Message(
     title="Stornierung eines Termins - Bootstrap Academy", template="cancelled_coaching_lecturer.html"
 )
 COMMERCIAL_CANCELLATION = Message(
-    title="Stornierung und bestehende Ansprüche - Bootstrap Academy", template="commercial_cancellation.html"
+    title="Information zu einer Stornierung - Bootstrap Academy", template="commercial_cancellation.html"
 )
 
 
