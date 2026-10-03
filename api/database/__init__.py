@@ -15,8 +15,11 @@ async def db_context() -> AsyncIterator[None]:
     db.create_session()
     try:
         yield
-    finally:
         await db.commit()
+    except BaseException:
+        await db.session.rollback()
+        raise
+    finally:
         await db.close()
 
 

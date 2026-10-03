@@ -1,18 +1,36 @@
+import json
 from datetime import timedelta
-from unittest.mock import AsyncMock, call
+from typing import Any, AsyncIterator, Awaitable, Callable, cast
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
+import httpx
 import pytest
+from fastapi import HTTPException
+from httpx import AsyncClient
 from pytest_mock import MockerFixture
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import db, select
 from api.endpoints.calendar import cancel_event, download_ics, rotate_ics_token
-from api.exceptions.auth import PermissionDeniedError
-from api.exceptions.slots import SlotNotFoundException
-from api.models import CalendarToken, EmergencyCancel, EventType, Slot, Webinar, WebinarParticipant
-from api.schemas.user import User, UserInfo
-from api.settings import settings
+from api.models import (
+    CalendarToken,
+    CoinOperation,
+    EmergencyCancel,
+    EventType,
+    SettlementClaim,
+    Slot,
+    Webinar,
+    WebinarParticipant,
+)
+from api.models.ordinary_cancellation import OrdinaryEventCancellation
+from api.schemas.ordinary_cancellation import CancellationDeclaration, CancellationPreparation
+from api.schemas.user import User
+from api.services import ordinary_cancellations as ordinary
+from api.services import settlements
 from api.utils.utc import utcnow
+from tests.payment_fixtures import paid_participant, paid_slot
+from tests.required import required
 
 
 USER = "40ab0e5c-b7ee-4a25-9d10-1eaf3c62d2bd"
@@ -81,11 +99,11 @@ def _webinar(start: timedelta, price: int = PRICE) -> Webinar:
 
 
 def _participant(user_id: str, paid_coins: int = PRICE) -> WebinarParticipant:
-    return WebinarParticipant(webinar_id="webinar", user_id=user_id, paid_coins=paid_coins)
+    return paid_participant(webinar_id="webinar", user_id=user_id, paid_coins=paid_coins)
 
 
 def _slot(start: timedelta, booked_by: str | None = STUDENT) -> Slot:
-    return Slot(
+    return paid_slot(
         id="slot",
         user_id=LECTURER,
         start=utcnow() + start,
@@ -101,440 +119,203 @@ def _slot(start: timedelta, booked_by: str | None = STUDENT) -> Slot:
 
 
 @pytest.fixture(autouse=True)
-def clear_cache_patch(mocker: MockerFixture) -> AsyncMock:
-    return mocker.patch("api.endpoints.calendar.clear_cache", AsyncMock())
+def local_effects(mocker: MockerFixture) -> AsyncMock:
+    mocker.patch("api.services.ordinary_cancellations.clear_cache", AsyncMock())
+    return mocker.patch("api.services.settlements.finish", AsyncMock())
 
 
-@pytest.fixture(autouse=True)
-def add_coins(mocker: MockerFixture) -> AsyncMock:
-    return mocker.patch("api.services.shop.add_coins", AsyncMock(return_value=True))
+def declaration(target: Any) -> dict[str, Any]:
+    return {
+        "target_id": target["id"],
+        "cancel_selected_scope": True,
+        "original_text": "I cancel exactly this displayed booking.",
+    }
 
 
-@pytest.fixture(autouse=True)
-def spend_coins(mocker: MockerFixture) -> AsyncMock:
-    return mocker.patch("api.services.shop.spend_coins", AsyncMock(return_value=True))
-
-
-@pytest.fixture(autouse=True)
-def send_email(mocker: MockerFixture) -> AsyncMock:
-    """Replace the lowest level of the mail path, so the templates are still rendered."""
-
-    return mocker.patch("api.utils.email.send_email", AsyncMock())
-
-
-@pytest.fixture(autouse=True)
-def userinfo(mocker: MockerFixture) -> AsyncMock:
-    mocker.patch("api.utils.email.get_email", AsyncMock(side_effect=lambda user_id: f"{user_id}@example.com"))
-    return mocker.patch(
-        "api.endpoints.calendar.get_userinfo",
-        AsyncMock(return_value=UserInfo(id=LECTURER, name="lecturer", display_name="Lecturer Person", avatar_url=None)),
+@pytest.mark.parametrize("denial", [None, "unauthorized", "invalid_schema"])
+async def test_route_records_completed_declaration_body_before_slow_current_auth_and_only_persists_valid_intake(
+    session: AsyncSession, client: AsyncClient, mocker: MockerFixture, denial: str
+) -> None:
+    webinar = await db.add(_webinar(timedelta(days=8)))
+    await db.add(_participant(STUDENT, paid_coins=42))
+    received = utcnow().replace(microsecond=654321)
+    webinar.start = received + timedelta(days=7)
+    webinar.end = webinar.start + timedelta(hours=1)
+    await db.commit()
+    prepared = await ordinary.prepare(_user(STUDENT), webinar.id, CancellationPreparation(kind="webinar"))
+    clock = {"now": received - timedelta(seconds=1)}
+    mocker.patch("api.endpoints.calendar.utcnow", side_effect=lambda: clock["now"])
+    mocker.patch.object(ordinary, "utcnow", side_effect=lambda: clock["now"])
+    mocker.patch(
+        "api.auth.decode_jwt",
+        return_value={"uid": STUDENT, "rt": "local-session", "data": {"admin": False, "email_verified": True}},
     )
+    mocker.patch("api.schemas.user.UserAccessToken.is_revoked", AsyncMock(return_value=False))
 
+    async def authority(access_token: str, expected_user_id: str) -> Any:
+        assert clock["now"] == received, "timestamp is observed after complete body arrival"
+        clock["now"] += timedelta(seconds=10)
+        return None if denial == "unauthorized" else _user(STUDENT)
 
-def _recipients(send_email: AsyncMock) -> list[tuple[str, str]]:
-    return [(c.args[0], c.args[1]) for c in send_email.await_args_list]
+    mocker.patch("api.auth.ordinary_authority", side_effect=authority)
+    command = str(uuid4())
+    body = declaration(prepared)
+    if denial == "invalid_schema":
+        body["client_received_at"] = received.isoformat()
+    encoded = json.dumps(body).encode()
 
+    async def chunks() -> AsyncIterator[bytes]:
+        yield encoded[:10]
+        clock["now"] = received
+        yield encoded[10:]
 
-def _body(send_email: AsyncMock, recipient: str) -> str:
-    return next(" ".join(c.args[2].split()) for c in send_email.await_args_list if c.args[0] == recipient)
-
-
-async def test__cancel_event__unknown_event(session: AsyncSession) -> None:
-    with pytest.raises(SlotNotFoundException):
-        await cancel_event("does not exist", _user(USER))
-
-
-async def test__cancel_event__webinar_of_somebody_else(session: AsyncSession, add_coins: AsyncMock) -> None:
-    await db.add(_webinar(timedelta(days=14)))
-
-    with pytest.raises(SlotNotFoundException):
-        await cancel_event("webinar", _user(OTHER))
-
-    assert await db.get(Webinar, id="webinar") is not None
-    add_coins.assert_not_awaited()
-
-
-async def test__cancel_event__webinar_that_has_already_started(session: AsyncSession, add_coins: AsyncMock) -> None:
-    await db.add(_webinar(timedelta(hours=-1)))
-
-    with pytest.raises(PermissionDeniedError):
-        await cancel_event("webinar", _user(LECTURER))
-
-    assert await db.get(Webinar, id="webinar") is not None
-    add_coins.assert_not_awaited()
-
-
-@pytest.mark.parametrize("actor", [LECTURER, ADMIN])
-async def test__cancel_event__webinar_cancelled__refunds_every_participant_exactly_once(
-    session: AsyncSession, add_coins: AsyncMock, spend_coins: AsyncMock, actor: str
-) -> None:
-    await db.add(_webinar(timedelta(days=2)))
-    await db.add(_participant(STUDENT))
-    await db.add(_participant(OTHER))
-
-    assert await cancel_event("webinar", _user(actor, admin=actor == ADMIN)) is True
-
-    # the participants are not loaded in a defined order, so the refunds are compared as a set
-    assert sorted(c.args for c in add_coins.await_args_list) == sorted(
-        [
-            (STUDENT, PRICE, "Cancel webinar 'test webinar'", False),
-            (OTHER, PRICE, "Cancel webinar 'test webinar'", False),
-        ]
+    response = await client.post(
+        f"/calendar/cancellations/{command}",
+        content=chunks(),
+        headers={"Content-Type": "application/json", "Authorization": "Bearer local"},
     )
-    spend_coins.assert_not_awaited()
-    assert await db.get(Webinar, id="webinar") is None
-    assert await db.all(select(WebinarParticipant)) == []
+    if denial:
+        assert response.status_code in (401, 422)
+        assert await db.get(OrdinaryEventCancellation, id=command) is None
+        assert await db.all(select(SettlementClaim)) == []
+        assert await db.get(WebinarParticipant, webinar_id=webinar.id, user_id=STUDENT) is not None
+    else:
+        assert response.status_code == 200, response.text
+        assert response.json()["received_at"] == received.isoformat()
+        claim: SettlementClaim = required(
+            cast(
+                SettlementClaim | None,
+                await db.first(select(SettlementClaim).where(SettlementClaim.user_id == STUDENT)),
+            )
+        )
+        assert claim.coins == 42 and claim.entitlement == "established"
+        assert response.json()["financial_satisfaction"] is False
 
 
-async def test__cancel_event__free_webinar_cancelled__no_refund(
-    session: AsyncSession, add_coins: AsyncMock, spend_coins: AsyncMock
+async def test_old_event_only_public_and_internal_callers_fail_without_creating_a_declaration(
+    session: AsyncSession,
 ) -> None:
-    await db.add(_webinar(timedelta(days=2), price=0))
-    await db.add(_participant(STUDENT, 0))
+    from api.endpoints.internal.users import cancel_recipient_event
 
-    assert await cancel_event("webinar", _user(LECTURER)) is True
-
-    add_coins.assert_not_awaited()
-    spend_coins.assert_not_awaited()
-
-
-async def test__cancel_event__webinar_cancelled__refunds_what_each_participant_paid(
-    session: AsyncSession, add_coins: AsyncMock
-) -> None:
-    """A registration that was free must not be refunded, and a changed price must not change a refund."""
-
-    await db.add(_webinar(timedelta(days=2)))
-    await db.add(_participant(STUDENT, PRICE // 4))
-    await db.add(_participant(OTHER, 0))
-
-    assert await cancel_event("webinar", _user(LECTURER)) is True
-
-    assert add_coins.await_args_list == [call(STUDENT, PRICE // 4, "Cancel webinar 'test webinar'", False)]
-
-
-async def test__cancel_event__free_registrations_cancelled__refunds_nothing(
-    session: AsyncSession, add_coins: AsyncMock
-) -> None:
-    """
-    The loop of the emergency cancellation.
-
-    A lecturer who cancels a webinar with participants owes the next booking, which is then free. Cancelling that
-    webinar as well used to credit its price to a participant who had paid nothing for it, so lecturer and
-    participant could create coins by repeating the two steps.
-    """
-
-    await db.add(_webinar(timedelta(days=2)))
-    await db.add(_participant(STUDENT, 0))
-
-    assert await cancel_event("webinar", _user(LECTURER)) is True
-
-    add_coins.assert_not_awaited()
-    assert await EmergencyCancel.exists(LECTURER) is True
-
-
-async def test__cancel_event__webinar_cancelled__mails_the_participants_and_the_lecturer(
-    session: AsyncSession, send_email: AsyncMock
-) -> None:
-    await db.add(_webinar(timedelta(days=2)))
+    event = await db.add(_webinar(timedelta(days=9)))
     await db.add(_participant(STUDENT))
-    await db.add(_participant(OTHER))
-
-    await cancel_event("webinar", _user(LECTURER))
-
-    recipients = _recipients(send_email)
-    assert sorted(recipients[:2]) == sorted(
-        [
-            (f"{STUDENT}@example.com", "Stornierung deiner Buchung - Bootstrap Academy"),
-            (f"{OTHER}@example.com", "Stornierung deiner Buchung - Bootstrap Academy"),
-        ]
-    )
-    assert recipients[2:] == [(f"{LECTURER}@example.com", "Stornierung eines Termins - Bootstrap Academy")]
-    body = _body(send_email, f"{STUDENT}@example.com")
-    assert 'Das Webinar "test webinar" am' in body
-    assert "wurde abgesagt" in body
-    assert f"Wir haben dir {PRICE} MorphCoins zurückerstattet." in body
-    assert 'Dein Webinar "test webinar" am' in _body(send_email, f"{LECTURER}@example.com")
-
-
-async def test__cancel_event__webinar_with_participants_cancelled__owes_the_next_event(session: AsyncSession) -> None:
-    await db.add(_webinar(timedelta(days=2)))
-    await db.add(_participant(STUDENT))
-
-    await cancel_event("webinar", _user(LECTURER))
-
-    assert await EmergencyCancel.exists(LECTURER) is True
-
-
-async def test__cancel_event__empty_webinar_cancelled__owes_nothing(session: AsyncSession) -> None:
-    await db.add(_webinar(timedelta(days=2)))
-
-    await cancel_event("webinar", _user(LECTURER))
-
-    assert await EmergencyCancel.exists(LECTURER) is False
-
-
-async def test__cancel_event__registration_cancelled_a_week_ahead__full_refund(
-    session: AsyncSession, add_coins: AsyncMock
-) -> None:
-    await db.add(_webinar(timedelta(days=8)))
-    await db.add(_participant(STUDENT))
-
-    assert await cancel_event("webinar", _user(STUDENT)) is True
-
-    assert add_coins.await_args_list == [call(STUDENT, PRICE, "Cancel webinar 'test webinar'", False)]
-    assert await db.all(select(WebinarParticipant)) == []
-    assert await db.get(Webinar, id="webinar") is not None
-
-
-async def test__cancel_event__registration_cancelled_a_day_ahead__half_refund(
-    session: AsyncSession, add_coins: AsyncMock
-) -> None:
-    await db.add(_webinar(timedelta(days=2)))
-    await db.add(_participant(STUDENT))
-
-    assert await cancel_event("webinar", _user(STUDENT)) is True
-
-    assert add_coins.await_args_list == [
-        call(STUDENT, PRICE // 2, "Cancel webinar 'test webinar'", False),
-        call(LECTURER, int(PRICE * (1 - settings.event_fee) // 2), "Cancel webinar 'test webinar'", False),
+    await db.commit()
+    operations: list[Callable[[], Awaitable[None]]] = [
+        lambda: cancel_event(event.id, _user(STUDENT)),
+        lambda: cancel_recipient_event(STUDENT, event.id),
     ]
-
-
-async def test__cancel_event__registration_cancelled_a_week_ahead__refunds_what_was_paid(
-    session: AsyncSession, add_coins: AsyncMock
-) -> None:
-    await db.add(_webinar(timedelta(days=8)))
-    await db.add(_participant(STUDENT, PRICE // 4))
-
-    assert await cancel_event("webinar", _user(STUDENT)) is True
-
-    assert add_coins.await_args_list == [call(STUDENT, PRICE // 4, "Cancel webinar 'test webinar'", False)]
-
-
-async def test__cancel_event__registration_cancelled_a_day_ahead__halves_what_was_paid(
-    session: AsyncSession, add_coins: AsyncMock
-) -> None:
-    """The tiers apply to the amount that was paid, so the lecturer's share is half of half of that amount."""
-
-    paid = PRICE // 4
-    await db.add(_webinar(timedelta(days=2)))
-    await db.add(_participant(STUDENT, paid))
-
-    assert await cancel_event("webinar", _user(STUDENT)) is True
-
-    assert add_coins.await_args_list == [
-        call(STUDENT, paid // 2, "Cancel webinar 'test webinar'", False),
-        call(LECTURER, int(paid * (1 - settings.event_fee) // 2), "Cancel webinar 'test webinar'", False),
-    ]
-
-
-async def test__cancel_event__free_registration_cancelled__pays_out_nothing(
-    session: AsyncSession, add_coins: AsyncMock
-) -> None:
-    await db.add(_webinar(timedelta(days=2)))
-    await db.add(_participant(STUDENT, 0))
-
-    assert await cancel_event("webinar", _user(STUDENT)) is True
-
-    add_coins.assert_not_awaited()
-    assert await db.all(select(WebinarParticipant)) == []
-
-
-async def test__cancel_event__registration_cancelled_within_a_day__forbidden(
-    session: AsyncSession, add_coins: AsyncMock, send_email: AsyncMock
-) -> None:
-    await db.add(_webinar(timedelta(hours=12)))
-    await db.add(_participant(STUDENT))
-
-    with pytest.raises(PermissionDeniedError):
-        await cancel_event("webinar", _user(STUDENT))
-
-    add_coins.assert_not_awaited()
-    send_email.assert_not_awaited()
+    for operation in operations:
+        with pytest.raises(HTTPException) as exc:
+            await operation()
+        assert exc.value.status_code == 409 and cast(dict[str, Any], exc.value.detail)["cancellation_recorded"] is False
     assert len(await db.all(select(WebinarParticipant))) == 1
+    assert await db.all(select(OrdinaryEventCancellation)) == []
 
 
-async def test__cancel_event__registration_cancelled__mails_both_sides(
-    session: AsyncSession, send_email: AsyncMock
+@pytest.mark.parametrize("paid", [0, 42, 1337])
+@pytest.mark.parametrize("days", [9, 1, -1])
+async def test_student_cancellation_uses_original_paid_amount_and_reviews_late_claims_without_half_or_forfeiture(
+    session: AsyncSession, paid: int, days: int
 ) -> None:
-    await db.add(_webinar(timedelta(days=8)))
-    await db.add(_participant(STUDENT))
-
-    await cancel_event("webinar", _user(STUDENT))
-
-    assert _recipients(send_email) == [
-        (f"{STUDENT}@example.com", "Stornierung deiner Buchung - Bootstrap Academy"),
-        (f"{LECTURER}@example.com", "Stornierung eines Termins - Bootstrap Academy"),
-    ]
-    assert 'Deine Anmeldung für das Webinar "test webinar" am' in _body(send_email, f"{STUDENT}@example.com")
-    assert "Eine Anmeldung für dein Webinar" in _body(send_email, f"{LECTURER}@example.com")
-
-
-async def test__cancel_event__coaching_of_somebody_else(session: AsyncSession, add_coins: AsyncMock) -> None:
-    await db.add(_slot(timedelta(days=14)))
-
-    with pytest.raises(SlotNotFoundException):
-        await cancel_event("slot", _user(OTHER))
-
-    slot = await db.get(Slot, id="slot")
-    assert slot is not None and slot.booked_by == STUDENT
-    add_coins.assert_not_awaited()
+    event = await db.add(_webinar(timedelta(days=days), price=9999))
+    await db.add(_participant(STUDENT, paid_coins=paid))
+    await db.commit()
+    prepared = await ordinary.prepare(_user(STUDENT), event.id, CancellationPreparation(kind="webinar"))
+    command, body = str(uuid4()), CancellationDeclaration(**declaration(prepared))
+    result = await ordinary.receive(_user(STUDENT), command, body)
+    assert result["state"] == "applied"
+    claim: SettlementClaim = required(
+        cast(SettlementClaim | None, await db.first(select(SettlementClaim).where(SettlementClaim.user_id == STUDENT)))
+    )
+    assert claim.coins == paid and claim.entitlement == ("established" if days == 9 else "pending_evidence")
+    assert await db.get(WebinarParticipant, webinar_id=event.id, user_id=STUDENT) is None
+    assert await db.get(Webinar, id=event.id) is not None
+    assert await ordinary.receive(_user(STUDENT), command, body) == result
+    assert len([row for row in await db.all(select(CoinOperation)) if row.user_id == STUDENT]) == (1 if paid else 0)
 
 
-async def test__cancel_event__free_coaching_slot(session: AsyncSession) -> None:
-    await db.add(_slot(timedelta(days=14), booked_by=None))
-
-    with pytest.raises(SlotNotFoundException):
-        await cancel_event("slot", _user(LECTURER))
-
-
-async def test__cancel_event__coaching_that_has_already_started(session: AsyncSession, add_coins: AsyncMock) -> None:
-    await db.add(_slot(timedelta(hours=-1)))
-
-    with pytest.raises(PermissionDeniedError):
-        await cancel_event("slot", _user(LECTURER))
-
-    add_coins.assert_not_awaited()
-
-
-async def test__cancel_event__lecturer_cancels_coaching__refunds_the_student(
-    session: AsyncSession, add_coins: AsyncMock
+@pytest.mark.parametrize("with_students", [False, True])
+async def test_provider_whole_session_cancels_exact_original_orders_and_empty_session_has_no_waiver(
+    session: AsyncSession, with_students: bool
 ) -> None:
-    await db.add(_slot(timedelta(days=2)))
+    event = await db.add(_webinar(timedelta(days=2)))
+    if with_students:
+        await db.add(_participant(STUDENT, paid_coins=42))
+        await db.add(_participant(OTHER, paid_coins=0))
+    await db.commit()
+    prepared = await ordinary.prepare(
+        _user(LECTURER), event.id, CancellationPreparation(kind="webinar", scope="session")
+    )
+    result = await ordinary.receive(_user(LECTURER), str(uuid4()), CancellationDeclaration(**declaration(prepared)))
+    assert result["state"] == "applied" and await db.get(Webinar, id=event.id) is None
+    claims = {row.user_id: row.coins for row in await db.all(select(SettlementClaim))}
+    assert claims == ({STUDENT: 42, OTHER: 0} if with_students else {})
+    assert await EmergencyCancel.exists(LECTURER) is with_students
 
-    assert await cancel_event("slot", _user(LECTURER)) is True
 
-    assert add_coins.await_args_list == [call(STUDENT, STUDENT_COINS, "Cancel coaching", False)]
-    assert await EmergencyCancel.exists(LECTURER) is True
-
-
-async def test__cancel_event__admin_cancels_coaching__refunds_the_student(
-    session: AsyncSession, add_coins: AsyncMock
+@pytest.mark.parametrize("contact", ["accepted", "missing", "unverified", "smtp_failure"])
+async def test_active_generic_notice_and_handoff_keep_original_origin_and_financial_uncertainty(
+    session: AsyncSession, mocker: MockerFixture, local_effects: AsyncMock, contact: str
 ) -> None:
-    """An admin who is neither the lecturer nor the student used to free the slot without refunding anybody."""
+    from api.services.internal import InternalService
+    from api.utils import email
 
-    await db.add(_slot(timedelta(days=2)))
+    event = await db.add(_webinar(timedelta(days=9)))
+    await db.add(_participant(STUDENT, paid_coins=42))
+    await db.commit()
+    prepared = await ordinary.prepare(_user(STUDENT), event.id, CancellationPreparation(kind="webinar"))
+    command = str(uuid4())
+    result = await ordinary.receive(_user(STUDENT), command, CancellationDeclaration(**declaration(prepared)))
+    assert result["state"] == "applied"
+    receipt = required(await db.get(OrdinaryEventCancellation, id=command))
+    sent = mocker.patch.object(
+        email,
+        "send_email",
+        AsyncMock(side_effect=RuntimeError("SMTP unavailable") if contact == "smtp_failure" else None),
+    )
+    requests = []
 
-    assert await cancel_event("slot", _user(ADMIN, admin=True)) is True
+    def response(request: Any) -> Any:
+        requests.append(str(request.url))
+        if contact == "missing":
+            return httpx.Response(404, json={})
+        return httpx.Response(
+            200, json={"email": "synthetic@example.invalid", "email_verified": contact != "unverified"}
+        )
 
-    assert add_coins.await_args_list == [call(STUDENT, STUDENT_COINS, "Cancel coaching", False)]
-    # the lecturer did not cancel, so they do not owe a free event
-    assert await EmergencyCancel.exists(LECTURER) is False
+    transport = httpx.MockTransport(response)
+    # Installed normal HTTP client fixture only; no sockets or service lifecycle.
+    mocker.patch.object(InternalService, "_get_token", return_value="synthetic-internal-fixture")
+    mocker.patch(
+        "api.services.internal.AsyncClient",
+        side_effect=lambda *a, **kw: httpx.AsyncClient(transport=transport, base_url="https://synthetic.invalid"),
+    )
+    handoffs = []
 
+    async def commercial(operation: str, payload: dict[str, Any]) -> Any:
+        assert operation == "register_event"
+        handoffs.append(payload)
+        return {
+            "protocol": 1,
+            "obligation_id": payload["obligation_id"],
+            "disposition": "claim_preserved",
+            "financial_satisfaction": False,
+        }
 
-async def test__cancel_event__student_cancels_coaching_a_week_ahead__full_refund(
-    session: AsyncSession, add_coins: AsyncMock
-) -> None:
-    await db.add(_slot(timedelta(days=8)))
-
-    assert await cancel_event("slot", _user(STUDENT)) is True
-
-    assert add_coins.await_args_list == [call(STUDENT, STUDENT_COINS, "Cancel coaching", False)]
-    assert await EmergencyCancel.exists(LECTURER) is False
-
-
-async def test__cancel_event__student_cancels_coaching_a_day_ahead__half_refund(
-    session: AsyncSession, add_coins: AsyncMock
-) -> None:
-    await db.add(_slot(timedelta(days=2)))
-
-    assert await cancel_event("slot", _user(STUDENT)) is True
-
-    assert add_coins.await_args_list == [
-        call(STUDENT, STUDENT_COINS // 2, "Cancel coaching", False),
-        call(LECTURER, INSTRUCTOR_COINS // 2, "Cancel coaching", False),
-    ]
-
-
-async def test__cancel_event__student_cancels_coaching_within_a_day__forbidden(
-    session: AsyncSession, add_coins: AsyncMock, send_email: AsyncMock
-) -> None:
-    await db.add(_slot(timedelta(hours=12)))
-
-    with pytest.raises(PermissionDeniedError):
-        await cancel_event("slot", _user(STUDENT))
-
-    add_coins.assert_not_awaited()
-    send_email.assert_not_awaited()
-    slot = await db.get(Slot, id="slot")
-    assert slot is not None and slot.booked_by == STUDENT
-
-
-async def test__cancel_event__cancelled_coaching__frees_the_slot(session: AsyncSession) -> None:
-    await db.add(_slot(timedelta(days=2)))
-
-    await cancel_event("slot", _user(ADMIN, admin=True))
-
-    slot = await db.get(Slot, id="slot")
-    assert slot is not None
-    assert slot.booked_by is None
-    assert slot.event_type is None
-    assert slot.student_coins is None
-    assert slot.instructor_coins is None
-    assert slot.link is None
-
-
-async def test__cancel_event__cancelled_coaching__mails_both_sides(
-    session: AsyncSession, send_email: AsyncMock
-) -> None:
-    await db.add(_slot(timedelta(days=2)))
-
-    await cancel_event("slot", _user(LECTURER))
-
-    assert _recipients(send_email) == [
-        (f"{STUDENT}@example.com", "Stornierung deiner Buchung - Bootstrap Academy"),
-        (f"{LECTURER}@example.com", "Stornierung eines Termins - Bootstrap Academy"),
-    ]
-    student_body = _body(send_email, f"{STUDENT}@example.com")
-    assert "Dein Coaching mit Lecturer Person am" in student_body
-    assert "wurde abgesagt" in student_body
-    assert f"Wir haben dir {STUDENT_COINS} MorphCoins zurückerstattet." in student_body
-    assert "Der Termin ist wieder buchbar." in _body(send_email, f"{LECTURER}@example.com")
-
-
-async def test__cancel_event__student_cancels_coaching__mails_both_sides(
-    session: AsyncSession, send_email: AsyncMock
-) -> None:
-    await db.add(_slot(timedelta(days=2)))
-
-    await cancel_event("slot", _user(STUDENT))
-
-    student_body = _body(send_email, f"{STUDENT}@example.com")
-    assert "Deine Buchung des Coachings mit Lecturer Person am" in student_body
-    assert f"Wir haben dir {STUDENT_COINS // 2} MorphCoins zurückerstattet." in student_body
-    lecturer_body = _body(send_email, f"{LECTURER}@example.com")
-    assert "Die Buchung deines Coaching-Termins am" in lecturer_body
-    assert f"Dir wurden {INSTRUCTOR_COINS // 2} MorphCoins als Ausgleich gutgeschrieben." in lecturer_body
-
-
-async def test__cancel_event__unknown_mail_address__cancels_anyway(
-    session: AsyncSession, mocker: MockerFixture, add_coins: AsyncMock, send_email: AsyncMock
-) -> None:
-    mocker.patch("api.utils.email.get_email", AsyncMock(return_value=None))
-    await db.add(_slot(timedelta(days=2)))
-
-    assert await cancel_event("slot", _user(LECTURER)) is True
-
-    send_email.assert_not_awaited()
-    assert add_coins.await_args_list == [call(STUDENT, STUDENT_COINS, "Cancel coaching", False)]
-
-
-async def test__cancel_event__failing_mail__cancels_anyway(
-    session: AsyncSession, add_coins: AsyncMock, send_email: AsyncMock
-) -> None:
-    send_email.side_effect = ValueError("Invalid email address")
-    await db.add(_slot(timedelta(days=2)))
-
-    assert await cancel_event("slot", _user(LECTURER)) is True
-
-    slot = await db.get(Slot, id="slot")
-    assert slot is not None and slot.booked_by is None
-    assert add_coins.await_args_list == [call(STUDENT, STUDENT_COINS, "Cancel coaching", False)]
-
-
-async def test__cancel_event__clears_the_calendar_cache(session: AsyncSession, clear_cache_patch: AsyncMock) -> None:
-    await db.add(_slot(timedelta(days=2)))
-
-    await cancel_event("slot", _user(LECTURER))
-
-    clear_cache_patch.assert_awaited_once_with("calendar")
+    mocker.patch("api.services.shop.commercial", side_effect=commercial)
+    await settlements.deliver([required(receipt.result)["batch_id"]])
+    view = await ordinary.status(_user(STUDENT), command)
+    assert view["financial_state"] == "pending" and view["financial_satisfaction"] is False
+    assert view["notice_state"] == ("smtp_accepted" if contact == "accepted" else "pending")
+    assert len(handoffs) == 1
+    fact = handoffs[0]["observation"]["cancellation_evidence"][0]
+    assert fact["origin"] == "ordinary_authenticated" and fact["command_id"] == command
+    assert handoffs[0]["operation_id"] == handoffs[0]["obligation_id"]
+    assert requests
+    if contact == "accepted":
+        assert len(sent.await_args_list) == 2
+        html = " ".join(sent.await_args_list[0].args[2].split())
+        assert command in html and "test webinar" in html and "möglichen Erstattung oder Vergütung" in html
+        assert "50% Rückerstattung" not in html and "wieder gutgeschrieben" not in html
+        await settlements.deliver([required(receipt.result)["batch_id"]])
+        assert len(sent.await_args_list) == 2 and len(handoffs) == 1

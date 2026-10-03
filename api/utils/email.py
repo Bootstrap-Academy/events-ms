@@ -1,8 +1,8 @@
-import asyncio
 import random
 import string
 from base64 import b64encode
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -31,6 +31,21 @@ env = Environment(loader=FileSystemLoader(TEMPLATES), autoescape=True)
 env.globals["logo_base64"] = b64encode((TEMPLATES / "logo-text.png").read_bytes()).decode()
 
 
+def readable_event_time(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return value
+    if parsed.tzinfo is None:
+        return value
+    parsed = parsed.astimezone(timezone.utc)
+    clock = "%H:%M:%S" if parsed.second or parsed.microsecond else "%H:%M"
+    return parsed.strftime(f"%d.%m.%Y um {clock} Uhr (UTC)")
+
+
+env.filters["event_time"] = readable_event_time
+
+
 @dataclass
 class Message:
     title: str
@@ -45,10 +60,9 @@ async def notify(message: Message, user_id: str, **kwargs: Any) -> None:
     """
     Send a message to a user, if the auth service knows an address for them.
 
-    Everything a message of this service reports has already happened when it is built: the coins have moved and a
-    booking has been created or cancelled. A mail that cannot be rendered or handed to the mail server is therefore
-    logged instead of failing the request, which would otherwise tell the caller that a booking they were charged
-    for did not happen.
+    The caller supplies only the booking observations it can support. Neither
+    sending a notice nor recording a claim proves that money has moved. Rendering
+    or SMTP failure is logged without undoing the caller's durable booking work.
     """
 
     try:
@@ -70,6 +84,9 @@ CANCELLED_WEBINAR_LECTURER = Message(
 CANCELLED_COACHING = Message(title="Stornierung deiner Buchung - Bootstrap Academy", template="cancelled_coaching.html")
 CANCELLED_COACHING_LECTURER = Message(
     title="Stornierung eines Termins - Bootstrap Academy", template="cancelled_coaching_lecturer.html"
+)
+COMMERCIAL_CANCELLATION = Message(
+    title="Information zu einer Stornierung - Bootstrap Academy", template="commercial_cancellation.html"
 )
 
 
@@ -96,16 +113,15 @@ async def send_email(recipient: str, title: str, body: str, *, reply_to: str | N
         message["Reply-To"] = reply_to
     message.attach(MIMEText(body, "html"))
 
-    asyncio.create_task(
-        aiosmtplib.send(
-            message,
-            hostname=settings.smtp_host,
-            port=settings.smtp_port,
-            username=settings.smtp_user,
-            password=settings.smtp_password,
-            use_tls=settings.smtp_tls,
-            start_tls=settings.smtp_starttls,
-        )
+    await aiosmtplib.send(
+        message,
+        hostname=settings.smtp_host,
+        port=settings.smtp_port,
+        username=settings.smtp_user,
+        password=settings.smtp_password,
+        use_tls=settings.smtp_tls,
+        start_tls=settings.smtp_starttls,
+        timeout=20,
     )
 
 
@@ -113,3 +129,27 @@ def generate_verification_code() -> str:
     return "-".join(
         "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(4)) for _ in range(4)  # noqa: S311
     )
+
+
+async def notify_commercial(user_id: str, reference: str, *, notice: dict[str, Any] | None = None) -> bool:
+    """True means SMTP accepted this notice, never that the claim was satisfied.
+
+    Live contact is read without the ordinary identity cache. An erased or
+    unverified contact needs the backend's retained-contact process; it remains
+    pending here instead of reusing a historical cached address.
+    """
+    from api.services.internal import InternalService
+
+    try:
+        async with InternalService.AUTH.client as client:
+            response = await client.get(f"/users/{user_id}")
+        if response.status_code != 200:
+            return False
+        account = response.json()
+        if account.get("email_verified") is not True or not isinstance(account.get("email"), str):
+            return False
+        await COMMERCIAL_CANCELLATION.send(account["email"], reference=reference, notice=notice)
+        return True
+    except Exception:
+        logger.exception("Commercial notice remains pending for %s", user_id)
+        return False

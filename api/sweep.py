@@ -100,8 +100,13 @@ async def sweep_deleted_users() -> None:
                 continue
 
             missing += 1
-            async with db_context():
-                await delete_user_data(user_id)
+            try:
+                async with db_context():
+                    await delete_user_data(user_id)
+            except Exception as exc:
+                errors += 1
+                logger.warning("User erasure failed; continuing sweep (%s)", type(exc).__name__)
+                continue
             deleted += 1
 
     logger.info(

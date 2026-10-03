@@ -7,12 +7,14 @@ from api.utils.email import (
     CANCELLED_COACHING_LECTURER,
     CANCELLED_WEBINAR,
     CANCELLED_WEBINAR_LECTURER,
+    COMMERCIAL_CANCELLATION,
     Message,
     env,
 )
 
 
 MESSAGES = [
+    COMMERCIAL_CANCELLATION,
     BOOKED_WEBINAR,
     BOOKED_COACHING,
     CANCELLED_WEBINAR,
@@ -20,6 +22,58 @@ MESSAGES = [
     CANCELLED_COACHING,
     CANCELLED_COACHING_LECTURER,
 ]
+
+
+@pytest.mark.parametrize("scope", ["session", "booking"])
+def test__commercial_cancellation__names_the_affected_event_without_claiming_payment(scope: str) -> None:
+    content = render(
+        COMMERCIAL_CANCELLATION,
+        reference="batch-reference",
+        notice={
+            "title": "Rust <Basics>",
+            "start": "2026-09-12T20:00:00+02:00",
+            "scope": scope,
+            "state": "applied",
+            "command_id": "declaration-reference",
+            "role": "administrator",
+            "affected_orders": 3,
+        },
+    )
+    assert "Rust &lt;Basics&gt;" in content
+    assert "12.09.2026 um 18:00 Uhr (UTC)" in content
+    assert "wurde abgesagt" in content if scope == "session" else "wurde storniert" in content
+    assert content.index("declaration-reference") > content.index("Rust &lt;Basics&gt;")
+    assert "https://bootstrap.academy/ansprueche" in content
+    assert "https://bootstrap.academy/docs/privacy" in content
+    for absent in [
+        "zurückerstattet",
+        "gutgeschrieben",
+        "Verzichtserklärung",
+        "Pflichtinformationen",
+        "Wir freuen uns auf dich",
+        "Lehrperson",
+    ]:
+        assert absent not in content
+
+
+def test__commercial_cancellation__unavailable_event_and_missing_context_do_not_invent_an_outcome() -> None:
+    content = render(
+        COMMERCIAL_CANCELLATION,
+        reference="batch-reference",
+        notice={
+            "title": "Python",
+            "start": "morgen",
+            "scope": "session",
+            "state": "unavailable",
+            "command_id": "declaration-reference",
+        },
+    )
+    assert "nicht mehr verfügbar" in content
+    assert "wurde abgesagt" not in content
+    assert "wurde storniert" not in content
+    missing = render(COMMERCIAL_CANCELLATION, reference="batch-reference")
+    assert "batch-reference" in missing and "None" not in missing
+    assert "wurde abgesagt" not in missing and "wurde storniert" not in missing
 
 
 def render(message: Message, **kwargs: object) -> str:
