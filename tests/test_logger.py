@@ -9,6 +9,7 @@ from uvicorn.logging import DefaultFormatter
 from ._utils import mock_list
 from api import logger
 from api.settings import settings
+from api.telemetry import sanitize_sentry_breadcrumb, sanitize_sentry_event
 
 
 async def test__setup_sentry(monkeypatch: MonkeyPatch, mocker: MockerFixture) -> None:
@@ -16,6 +17,7 @@ async def test__setup_sentry(monkeypatch: MonkeyPatch, mocker: MockerFixture) ->
     loggingintegration_patch = mocker.patch("api.logger.LoggingIntegration")
     sqlalchemyintegration_patch = mocker.patch("api.logger.SqlalchemyIntegration")
     aiohttpintegration_patch = mocker.patch("api.logger.AioHttpIntegration")
+    fastapiintegration_patch = mocker.patch("api.logger.FastApiIntegration")
     logging_patch = mocker.patch("api.logger.logging")
     sentry_sdk_init_patch = mocker.patch("api.logger.sentry_sdk.init")
     monkeypatch.setattr(settings, "sentry_environment", "foobar42")
@@ -25,15 +27,27 @@ async def test__setup_sentry(monkeypatch: MonkeyPatch, mocker: MockerFixture) ->
     logger.setup_sentry(app, dsn, name, version)
 
     aiohttpintegration_patch.assert_called_once_with()
+    fastapiintegration_patch.assert_called_once_with(transaction_style="url")
     sqlalchemyintegration_patch.assert_called_once_with()
-    loggingintegration_patch.assert_called_once_with(level=logging_patch.DEBUG, event_level=logging_patch.WARNING)
+    loggingintegration_patch.assert_called_once_with(level=logging_patch.INFO, event_level=logging_patch.WARNING)
     sentry_sdk_init_patch.assert_called_once_with(
         dsn=dsn,
         attach_stacktrace=True,
+        include_local_variables=False,
+        max_request_body_size="never",
+        send_default_pii=False,
         shutdown_timeout=5,
-        integrations=[aiohttpintegration_patch(), sqlalchemyintegration_patch(), loggingintegration_patch()],
+        integrations=[
+            aiohttpintegration_patch(),
+            fastapiintegration_patch(transaction_style="url"),
+            sqlalchemyintegration_patch(),
+            loggingintegration_patch(),
+        ],
         release=f"{name}@{version}",
         environment="foobar42",
+        before_send=sanitize_sentry_event,
+        before_send_transaction=sanitize_sentry_event,
+        before_breadcrumb=sanitize_sentry_breadcrumb,
     )
     ignore_logger_patch.assert_called_once_with("uvicorn.error")
 
