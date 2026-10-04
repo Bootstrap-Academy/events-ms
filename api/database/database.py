@@ -85,17 +85,32 @@ class Base(metaclass=DeclarativeMeta):
     registry = registry()
     metadata = registry.metadata
 
-    __table_args__ = {"mysql_collate": "utf8mb4_bin"}
+    __table_args__: dict[str, Any] | tuple[Any, ...] = {"mysql_collate": "utf8mb4_bin"}
 
     def __init__(self, **kwargs: Any) -> None:
         self.registry.constructor(self, **kwargs)
 
 
 class DB:
-    def __init__(self, url: str, **kwargs: Any):
+    def __init__(self, url: str, reserve_committed_reader: bool = False, **kwargs: Any):
+        self.committed_read_engine: AsyncEngine | None = None
+        if reserve_committed_reader:
+            size, overflow = kwargs.get("pool_size", 5), kwargs.get("max_overflow", 10)
+            if size < 1 or overflow < 0 or size + overflow < 2:
+                raise ValueError("Events committed availability requires a finite connection budget of at least two")
+            # Reserve one existing budget slot; never add spillover to the
+            # deployment's configured pool_size + max_overflow total.
+            reader = kwargs | {"pool_size": 1, "max_overflow": 0, "pool_timeout": 3}
+            kwargs = kwargs | ({"max_overflow": overflow - 1} if overflow else {"pool_size": size - 1})
+            self.committed_read_engine = create_async_engine(url, **reader)
         self.engine: AsyncEngine = create_async_engine(url, **kwargs)
         self._session: ContextVar[AsyncSession | None] = ContextVar("session", default=None)
         self._close_event: ContextVar[Event | None] = ContextVar("close_event", default=None)
+
+    async def dispose(self) -> None:
+        if self.committed_read_engine is not None:
+            await self.committed_read_engine.dispose()
+        await self.engine.dispose()
 
     async def create_tables(self) -> None:
         """Create all tables defined in enabled cog packages."""
@@ -178,7 +193,7 @@ class DB:
     def create_session(self) -> AsyncSession:
         """Create a new async session and store it in the context variable."""
 
-        self._session.set(session := AsyncSession(self.engine))
+        self._session.set(session := AsyncSession(self.engine, expire_on_commit=False))
         self._close_event.set(Event())
         return session
 
@@ -202,6 +217,7 @@ def get_database() -> DB:
 
     return DB(
         url=settings.database_url,
+        reserve_committed_reader=True,
         pool_pre_ping=True,
         pool_recycle=settings.pool_recycle,
         pool_size=settings.pool_size,

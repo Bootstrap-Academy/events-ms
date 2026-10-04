@@ -6,16 +6,41 @@ from _pytest.monkeypatch import MonkeyPatch
 from pytest_mock import MockerFixture
 
 from api.database import db, db_context, select
-from api.models import Coaching, EmergencyCancel, Exam, LecturerRating, Slot, Webinar, WebinarParticipant, WeeklySlot
+from api.models import (
+    Coaching,
+    CoinOperation,
+    EmergencyCancel,
+    EventSubjectGuard,
+    Exam,
+    LecturerRating,
+    RetainedEventRight,
+    Slot,
+    Webinar,
+    WebinarParticipant,
+    WeeklySlot,
+)
+from api.models.booking_payment import CommercialErasureReceipt
 from api.services.internal import InternalServiceError
 from api.settings import settings
 from api.sweep import RateLimiter, main, sweep_deleted_users, user_id_batch_query
 from api.utils.utc import utcnow
+from tests.payment_fixtures import paid_participant, paid_slot
+from tests.required import required
+from tests.services.test_user_deletion import CommercialResponses, canonical_erasure
 
 
 EXISTING = "11111111-1111-1111-1111-111111111111"
 DELETED = "22222222-2222-2222-2222-222222222222"
 UNKNOWN = "33333333-3333-3333-3333-333333333333"
+
+
+@pytest.fixture(autouse=True)
+def commercial_remote(mocker: MockerFixture) -> CommercialResponses:
+    remote = CommercialResponses(
+        receipts={subject: canonical_erasure(subject) for subject in [EXISTING, DELETED, UNKNOWN]}
+    )
+    mocker.patch("api.services.shop.commercial", side_effect=remote.__call__)
+    return remote
 
 
 @pytest.fixture(autouse=True)
@@ -47,12 +72,12 @@ async def data(database: None) -> None:
                 price=1337,
             )
         )
-        await db.add(WebinarParticipant(webinar_id="webinar", user_id=DELETED, paid_coins=1337))
+        await db.add(paid_participant(webinar_id="webinar", user_id=DELETED, paid_coins=1337))
         await db.add(
             WeeklySlot(id="weekly", user_id=UNKNOWN, weekday=3, start=time(10, 0), end=time(11, 0), last_slot=utcnow())
         )
         await db.add(
-            Slot(
+            paid_slot(
                 id="slot",
                 user_id=EXISTING,
                 start=utcnow() + timedelta(days=1),
@@ -132,15 +157,20 @@ async def test__sweep_deleted_users(data: None, exists_user_patch: AsyncMock) ->
         # only the data of the user the auth service does not know anymore is deleted
         assert [c.user_id for c in await db.all(select(Coaching))] == []
         assert [e.user_id for e in await db.all(select(Exam))] == []
-        assert [p.user_id for p in await db.all(select(WebinarParticipant))] == []
+        assert [p.user_id for p in await db.all(select(WebinarParticipant))] == [DELETED]
         assert [r.id for r in await db.all(select(LecturerRating))] == []
 
         assert [w.id for w in await db.all(select(Webinar))] == ["webinar"]
         assert [w.id for w in await db.all(select(WeeklySlot))] == ["weekly"]
         assert [e.user_id for e in await db.all(select(EmergencyCancel))] == [UNKNOWN]
 
-        # the booking of the deleted user is cancelled, the slot itself belongs to another lecturer and is kept
-        assert [(s.id, s.user_id, s.booked_by) for s in await db.all(select(Slot))] == [("slot", EXISTING, None)]
+        # Data erasure preserves the exact original booking; it does not declare cancellation.
+        assert [(s.id, s.user_id, s.booked_by) for s in await db.all(select(Slot))] == [("slot", EXISTING, DELETED)]
+        rights = await db.all(select(RetainedEventRight))
+        assert len(rights) == 2 and all(
+            right.current_subject is None and right.state == "preserved" for right in rights
+        )
+        assert (required(await db.get(CommercialErasureReceipt, subject=DELETED))).acknowledged_at is not None
 
 
 async def test__sweep_deleted_users__batched(
@@ -164,3 +194,41 @@ def test__main(mocker: MockerFixture) -> None:
     main()
 
     run_patch.assert_called_once_with(sweep_patch())
+
+
+async def test__pending_inventory_does_not_starve_next_deleted_user(
+    data: None, mocker: MockerFixture, commercial_remote: CommercialResponses
+) -> None:
+    mocker.patch("api.sweep.exists_user_uncached", AsyncMock(return_value=False))
+    commercial_remote.receipts.pop(EXISTING)  # first user has no canonical receipt, so ACK remains pending
+    await sweep_deleted_users()
+    async with db_context():
+        assert [w.id for w in await db.all(select(Webinar))] == ["webinar"]
+        assert await db.all(select(Coaching)) == []
+        assert await db.all(select(WeeklySlot)) == []
+        assert await db.all(select(EmergencyCancel)) == []
+        operations = await db.all(select(CoinOperation))
+        assert operations == []  # Data-only erasure never manufactures a cancellation/refund.
+        assert (required(await db.get(CommercialErasureReceipt, subject=EXISTING))).acknowledged_at is None
+        assert (required(await db.get(CommercialErasureReceipt, subject=DELETED))).acknowledged_at is not None
+
+
+async def test__cache_failure_keeps_first_user_discoverable_but_deletes_next(
+    data: None, mocker: MockerFixture, clear_cache_patch: AsyncMock
+) -> None:
+    mocker.patch("api.sweep.exists_user_uncached", AsyncMock(return_value=False))
+    mocker.patch("api.services.shop.apply_coin_operation", AsyncMock(return_value=True))
+    clear_cache_patch.side_effect = [RuntimeError("synthetic cache outage"), *[None] * 20]
+    await sweep_deleted_users()
+    async with db_context():
+        assert [w.creator for w in await db.all(select(Webinar))] == [EXISTING]
+        assert await db.all(select(Coaching)) == []
+        assert await db.all(select(WeeklySlot)) == []
+        assert await db.get(EventSubjectGuard, subject=EXISTING) is None
+        assert (required(await db.get(EventSubjectGuard, subject=DELETED))).deleted is True
+    clear_cache_patch.side_effect = None
+    await sweep_deleted_users()
+    async with db_context():
+        assert [w.id for w in await db.all(select(Webinar))] == ["webinar"]
+        assert (required(await db.get(EventSubjectGuard, subject=EXISTING))).deleted is True
+        assert (required(await db.get(CommercialErasureReceipt, subject=EXISTING))).acknowledged_at is not None

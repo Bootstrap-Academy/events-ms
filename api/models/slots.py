@@ -12,9 +12,9 @@ from sqlalchemy.orm import Mapped, relationship
 
 from api.database import Base, db, db_wrapper, select
 from api.database.database import UTCDateTime
+from api.models.booking_contract import BookingContract
 from api.models.weekly_slots import WeeklySlot
-from api.services import shop
-from api.services.skills import add_xp
+from api.services import benefits, booking_contracts, booking_payments, commercial, payment_claims, settlements
 from api.settings import settings
 from api.utils.utc import utcnow
 
@@ -31,6 +31,7 @@ class Slot(Base):
     user_id: Mapped[str] = Column(String(36))
     start: Mapped[datetime] = Column(UTCDateTime)
     end: Mapped[datetime] = Column(UTCDateTime)
+    payment_id: Mapped[str | None] = Column(String(36), nullable=True, unique=True)
     booked_by: Mapped[str | None] = Column(String(36), nullable=True)
     event_type: Mapped[EventType | None] = Column(Enum(EventType), nullable=True)
     student_coins: Mapped[int | None] = Column(BigInteger, nullable=True)
@@ -79,6 +80,7 @@ class Slot(Base):
         self.admin_link, self.link = generate_meeting_link()
 
     def cancel(self) -> None:
+        self.payment_id = None
         self.booked_by = None
         self.event_type = None
         self.student_coins = None
@@ -97,18 +99,43 @@ def generate_meeting_link() -> tuple[str, str]:
 
 @db_wrapper
 async def clean_old_slots() -> None:
+    batch = await settlements.new_batch("payout")
     now = utcnow()
     slot: Slot
-    async for slot in await db.stream(select(Slot).where(Slot.end < now)):
+    async for slot in await db.stream(
+        select(Slot).where(Slot.end < now).with_for_update().execution_options(populate_existing=True)
+    ):
         # if slot.booked and slot.event_type == EventType.EXAM and now - slot.end < timedelta(days=7):
         #     continue
         if slot.booked and slot.booked_by is not None and slot.skill_id is not None:
-            if slot.instructor_coins:
-                await shop.add_coins(slot.user_id, slot.instructor_coins, "Coaching", True)
-            await add_xp(slot.user_id, slot.skill_id, settings.coaching_lecturer_xp)
-            await add_xp(slot.booked_by, slot.skill_id, settings.coaching_participant_xp)
+            payment = None
+            if slot.event_type == EventType.COACHING:
+                payment = await booking_payments.payment_for(slot)
+                if await commercial.cleanup_claims(payment, slot, slot.user_id, batch.id):
+                    await booking_contracts.close(payment)
+                    await db.delete(slot)
+                    continue
+                if not await booking_contracts.ready(payment):
+                    contract = await db.get(BookingContract, id=payment.id)
+                    if contract is not None:
+                        contract.state = "review"
+                    await db.delete(slot)
+                    continue
+                await payment_claims.credit(
+                    batch.id,
+                    slot.id,
+                    payment.original["commercial_event"]["instructor_id"],
+                    [payment],
+                    "Coaching",
+                    True,
+                    field="payout_coins",
+                )
+            elif slot.instructor_coins:
+                await settlements.credit(batch, slot.id, slot.user_id, slot.instructor_coins, "Coaching", True)
+            await benefits.record(slot, payment, "instructor", slot.user_id, settings.coaching_lecturer_xp)
+            await benefits.record(slot, payment, "participant", slot.booked_by, settings.coaching_participant_xp)
         await db.delete(slot)
 
-    weekly_slot: WeeklySlot
-    async for weekly_slot in await db.stream(select(WeeklySlot)):
-        await weekly_slot.create_slots()
+    # Recurring rules remain available to export/deletion, but no longer
+    # produce new availability after coaching has left the product.
+    await settlements.finish([batch.id])

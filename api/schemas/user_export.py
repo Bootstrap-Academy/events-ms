@@ -1,9 +1,11 @@
 from datetime import datetime, time
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
 class Webinar(BaseModel):
+    xp_delivery_protocol: int | None = None
     id: str = Field(description="ID of the webinar")
     skill_id: str = Field(description="ID of the skill the webinar belongs to")
     creation_date: datetime = Field(description="Point in time at which the webinar was created")
@@ -23,7 +25,8 @@ class WebinarParticipation(BaseModel):
     skill_id: str = Field(description="ID of the skill the webinar belongs to")
     name: str = Field(description="Title of the webinar")
     start: datetime = Field(description="Start of the webinar")
-    paid_coins: int = Field(description="Amount the user was charged for this registration in Morphcoins")
+    paid_coins: int | None = Field(description="Proven charge; null means payment amount is unresolved")
+    payment_id: str | None = None
 
 
 class Slot(BaseModel):
@@ -62,7 +65,59 @@ class LecturerRating(BaseModel):
     rating: int | None = Field(description="Rating that has been submitted, if any")
 
 
+class CoinOperation(BaseModel):
+    provenance: str = "ready"
+    id: str
+    event_id: str
+    coins: int
+    description: str
+    completed_at: datetime | None
+    attempts: int
+    last_error: str | None
+
+
+class BookingPayment(BaseModel):
+    xp_delivery_protocol: int | None = None
+    id: str
+    event_id: str
+    kind: str
+    state: str
+    quoted_coins: int | None
+    paid_coins: int | None
+    created_at: datetime
+    attempts: int
+    last_error: str | None
+    student_deletion_claim: bool = False
+
+
+class SettlementClaim(BaseModel):
+    id: str
+    event_id: str
+    created_at: datetime
+    coins: int | None
+    resolved_at: datetime | None
+    entitlement: str = "legacy_review"
+    basis: dict[str, Any] = Field(default_factory=dict)
+
+    cancellation_evidence: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class UserDataExport(BaseModel):
+    ordinary_event_cancellations: dict[str, Any] = Field(default_factory=lambda: {"targets": [], "declarations": []})
+    event_cancellations: list[dict[str, Any]] = Field(default_factory=list)
+    event_benefits: dict[str, Any] = Field(default_factory=lambda: {"earnings": [], "observations": []})
+    retained_event_rights: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "rights": [],
+            "erasures": [],
+            "grants": [],
+            "booking_reservations": {},
+            "subject_guard": None,
+        }
+    )
+    commercial_handoffs: list[dict[str, Any]] = Field(default_factory=list)
+    commercial_erasure_receipt: dict[str, Any] | None = None
+    purchase_contracts: list[dict[str, Any]] = Field(default_factory=list)
     """Everything this service stores about a single user.
 
     User ids of other people (participants of a webinar, the instructor of a booked slot, the participant a rating
@@ -70,6 +125,11 @@ class UserDataExport(BaseModel):
     ISO 8601 timestamps in UTC.
     """
 
+    booking_payments: list[BookingPayment] = Field(default_factory=list)
+    settlement_claims: list[SettlementClaim] = Field(default_factory=list)
+    coin_operations: list[CoinOperation] = Field(
+        default_factory=list, description="Pending and completed event credits"
+    )
     webinars: list[Webinar] = Field(description="Webinars the user has created")
     webinar_participations: list[WebinarParticipation] = Field(description="Webinars the user has booked")
     slots_offered: list[Slot] = Field(description="Slots the user offers as an instructor")
