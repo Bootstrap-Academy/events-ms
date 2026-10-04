@@ -126,7 +126,7 @@ async def test_all_scoped_webinar_views_use_exact_host_election(
     from api.endpoints import learning
     from api.schemas.user import User, UserInfo
 
-    info = UserInfo(id=THIRD, display_name="Synthetic host", avatar_url=None)
+    info = UserInfo(id=THIRD, avatar_url=None)
     for path in ("api.endpoints.calendar.get_userinfo", "api.models.webinars.get_userinfo"):
         mocker.patch(path, AsyncMock(return_value=info))
     mocker.patch("api.models.webinars.LecturerRating.get_rating", AsyncMock(return_value=None))
@@ -174,7 +174,7 @@ async def test_scoped_coaching_calendar_uses_retained_host_readiness_and_window(
     from tests.services.test_event_succession import authorize
     from tests.services.test_user_deletion import _slot
 
-    info = UserInfo(id=THIRD, display_name="Synthetic host", avatar_url=None)
+    info = UserInfo(id=THIRD, avatar_url=None)
     mocker.patch("api.endpoints.calendar.get_userinfo", AsyncMock(return_value=info))
     mocker.patch("api.models.webinars.LecturerRating.get_rating", AsyncMock(return_value=None))
     event = _slot(str(uuid4()), USER, OTHER)
@@ -208,7 +208,7 @@ async def test_mounted_scoped_host_reads_agree_after_exact_contract_review(
     from api.endpoints import learning
     from api.schemas.user import User, UserInfo
 
-    info = UserInfo(id=THIRD, display_name="Synthetic host", avatar_url=None)
+    info = UserInfo(id=THIRD, avatar_url=None)
     for path in ("api.endpoints.calendar.get_userinfo", "api.models.webinars.get_userinfo"):
         mocker.patch(path, AsyncMock(return_value=info))
     mocker.patch("api.models.webinars.LecturerRating.get_rating", AsyncMock(return_value=None))

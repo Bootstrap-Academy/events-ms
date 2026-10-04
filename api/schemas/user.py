@@ -33,9 +33,24 @@ class UserAccessToken(BaseModel):
 
 
 class UserInfo(BaseModel):
+    """Event response identity; events do not publish account names."""
+
     id: str = Field(description="Unique identifier for the user")
-    display_name: str = Field(description="Full name of the user")
     avatar_url: str | None = Field(description="URL of the user's avatar")
+
+    class Config:
+        extra = Extra.ignore
+
+    def __str__(self) -> str:
+        return "User"
+
+
+class UserDetails(BaseModel):
+    """Internal details for existing contracts and support, never an event DTO."""
+
+    id: str
+    display_name: str
+    avatar_url: str | None
 
     class Config:
         extra = Extra.ignore

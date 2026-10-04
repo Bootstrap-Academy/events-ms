@@ -12,7 +12,7 @@ from api.exceptions.auth import admin_responses, verified_responses
 from api.exceptions.ratings import CouldNotSendMessageError, RatingNotFoundError
 from api.schemas.ratings import Unrated
 from api.schemas.user import User, UserInfo
-from api.services.auth import get_email, get_userinfo
+from api.services.auth import get_email, get_userdetails, get_userinfo
 from api.settings import settings
 from api.utils.email import send_email
 
@@ -83,13 +83,12 @@ async def report_lecturer(
     if not settings.contact_email:
         raise CouldNotSendMessageError
 
-    if not (student := await get_userinfo(user.id)):
+    if not (student := await get_userdetails(user.id)):
         raise CouldNotSendMessageError
-    if not (lecturer := await get_userinfo(r.lecturer_id)):
+    if not (lecturer := await get_userdetails(r.lecturer_id)):
         raise CouldNotSendMessageError
 
-    # the addresses are fetched separately because UserInfo, which is part of several api responses, does not
-    # contain the email address of the user it describes
+    # Contact details are fetched only for support; event responses use UserInfo.
     student_email = await get_email(user.id)
     lecturer_email = await get_email(r.lecturer_id)
 

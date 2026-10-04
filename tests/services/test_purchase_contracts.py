@@ -17,7 +17,7 @@ from api.database import Base, db, db_context, filter_by
 from api.endpoints.coachings import book_coaching
 from api.models import BookingPayment, Coaching, EmergencyCancel, SettlementBatch, SettlementClaim, Slot
 from api.models.booking_contract import BookingContract
-from api.schemas.user import User, UserInfo
+from api.schemas.user import User, UserDetails, UserInfo
 from api.services import booking_contracts, booking_payments, payment_claims
 from api.services.internal import InternalService
 from api.utils.jwt import encode_jwt
@@ -48,8 +48,11 @@ async def ledger(mocker: Any) -> Any:
             },
         ),
     )
-    info = UserInfo(id=HOST, display_name="Synthetic host", avatar_url=None)
-    mocker.patch("api.services.booking_contracts.get_userinfo", AsyncMock(return_value=info))
+    info = UserInfo(id=HOST, avatar_url=None)
+    mocker.patch(
+        "api.services.booking_contracts.get_userdetails",
+        AsyncMock(return_value=UserDetails(id=HOST, display_name="Synthetic host", avatar_url=None)),
+    )
     mocker.patch("api.endpoints.coachings.get_userinfo", AsyncMock(return_value=info))
     mocker.patch("api.endpoints.coachings.clear_cache", AsyncMock())
     mocker.patch("api.models.LecturerRating.get_rating", AsyncMock(return_value=None))
@@ -209,7 +212,7 @@ async def test_committed_availability_deadline(ledger: Any, mocker: Any, boundar
     from api.services.user_export import export_user_data
 
     mocker.patch("api.endpoints.webinars.clear_cache", AsyncMock())
-    info = UserInfo(id=HOST, display_name="Synthetic host", avatar_url=None)
+    info = UserInfo(id=HOST, avatar_url=None)
     mocker.patch("api.models.webinars.get_userinfo", AsyncMock(return_value=info))
     mocker.patch("api.endpoints.calendar.get_userinfo", AsyncMock(return_value=info))
     mocker.patch("api.models.webinars.LecturerRating.create", AsyncMock())

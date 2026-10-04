@@ -135,7 +135,7 @@ async def test_old_coaching_booking_header_cannot_claim_unrelated_rebooking(
     from tests.services.test_retained_events import canonical
 
     host, second = str(uuid4()), str(uuid4())
-    info = UserInfo(id=host, display_name="Synthetic host", avatar_url=None)
+    info = UserInfo(id=host, avatar_url=None)
     for path in ("api.endpoints.coachings.get_userinfo", "api.endpoints.calendar.get_userinfo"):
         mocker.patch(path, AsyncMock(return_value=info))
     for path in (
@@ -244,8 +244,7 @@ async def test_scoped_new_participant_reads_keep_confirmed_booking_access(
     event.end = event.start + timedelta(hours=1)
     await db.add(event)
     mocker.patch(
-        "api.endpoints.calendar.get_userinfo",
-        AsyncMock(return_value=UserInfo(id=event.creator, display_name="Synthetic host", avatar_url=None)),
+        "api.endpoints.calendar.get_userinfo", AsyncMock(return_value=UserInfo(id=event.creator, avatar_url=None))
     )
     offered = await learning.webinar_offer(UUID(event.id), _user(STUDENT))
     data = booking_contracts.Acceptance(

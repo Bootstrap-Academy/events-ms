@@ -17,7 +17,7 @@ AUTH_SERVICE_RESPONSE: dict[str, Any] = {
 
 
 def test__user_info__does_not_declare_private_identity_fields() -> None:
-    for field in ("email", "name"):
+    for field in ("email", "name", "display_name"):
         assert field not in UserInfo.__fields__
         assert field not in UserInfo.schema()["properties"]
 
@@ -25,10 +25,11 @@ def test__user_info__does_not_declare_private_identity_fields() -> None:
 def test__user_info__drops_the_email_address_of_the_auth_service() -> None:
     user_info = UserInfo(**AUTH_SERVICE_RESPONSE)
 
-    assert user_info.dict() == {"id": "user42", "display_name": "Display Name", "avatar_url": None}
+    assert user_info.dict() == {"id": "user42", "avatar_url": None}
     assert not hasattr(user_info, "email")
     assert not hasattr(user_info, "name")
-    assert str(user_info) == "Display Name"
+    assert not hasattr(user_info, "display_name")
+    assert str(user_info) == "User"
 
 
 def test__user_info__is_not_serialized_with_an_email_address() -> None:
@@ -42,3 +43,4 @@ def test__user_info__is_not_serialized_with_an_email_address() -> None:
 
     assert "email" not in unrated.dict()["instructor"]
     assert "name" not in unrated.dict()["instructor"]
+    assert "display_name" not in unrated.dict()["instructor"]

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pytest_mock import MockerFixture
 
-from api.schemas.user import UserInfo
+from api.schemas.user import UserDetails, UserInfo
 from api.services import auth
 
 
@@ -52,5 +52,17 @@ async def test__get_userinfo(mocker: MockerFixture, data: dict[str, str] | None)
     fetch_userinfo.assert_called_once_with("user42")
     assert result == (UserInfo(**data) if data else None)
     if result is not None:
-        # Old cached dictionaries must also lose the private nickname on read.
+        # Warm caches from older versions must not leak either account name.
         assert "name" not in result.dict()
+        assert "display_name" not in result.dict()
+
+
+async def test_internal_contract_details_keep_the_display_name(mocker: MockerFixture) -> None:
+    mocker.patch("api.services.auth._fetch_userinfo", AsyncMock(return_value=AUTH_SERVICE_RESPONSE))
+
+    result = await auth.get_userdetails("user42")
+
+    assert result == UserDetails(id="user42", display_name="Display Name", avatar_url=None)
+    assert str(result) == "Display Name"
+    assert "name" not in result.dict()
+    assert "email" not in result.dict()

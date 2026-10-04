@@ -1,6 +1,6 @@
 from typing import Any, cast
 
-from api.schemas.user import User, UserInfo
+from api.schemas.user import User, UserDetails, UserInfo
 from api.services.internal import InternalService
 from api.utils.cache import redis_cached
 
@@ -61,13 +61,19 @@ async def _fetch_userinfo(user_id: str) -> dict[str, Any] | None:
         if response.status_code != 200:
             return None
 
-        # Cache only the response allowlist; private nicknames and emails stay out.
-        return UserInfo(**response.json()).dict()
+        # Internal contract/support details; private nicknames and emails stay out.
+        return UserDetails(**response.json()).dict()
 
 
 async def get_userinfo(user_id: str) -> UserInfo | None:
     data = await _fetch_userinfo(user_id)
     return UserInfo(**data) if data is not None else None
+
+
+async def get_userdetails(user_id: str) -> UserDetails | None:
+    """Internal contract/support use only; response paths use get_userinfo."""
+    data = await _fetch_userinfo(user_id)
+    return UserDetails(**data) if data is not None else None
 
 
 async def ordinary_authority(access_token: str, expected_user_id: str) -> User | None:
