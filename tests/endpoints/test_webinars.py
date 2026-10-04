@@ -13,7 +13,7 @@ from api.database import db, select
 from api.endpoints.webinars import register_for_webinar
 from api.exceptions.coaching import NotEnoughCoinsError
 from api.models import BookingContract, EmergencyCancel, Webinar, WebinarParticipant
-from api.schemas.user import User, UserInfo
+from api.schemas.user import User, UserDetails, UserInfo
 from api.services import booking_availability, booking_contracts
 from api.services.internal import InternalService
 from api.utils.utc import utcnow
@@ -110,8 +110,8 @@ def contract_backend(mocker: MockerFixture, spend_coins: AsyncMock) -> dict[str,
         fget=lambda _: AsyncClient(base_url="http://synthetic", transport=MockTransport(handle)),
     )
     mocker.patch(
-        "api.services.booking_contracts.get_userinfo",
-        AsyncMock(return_value=UserInfo(id=LECTURER, name="lecturer", display_name="Lecturer Person", avatar_url=None)),
+        "api.services.booking_contracts.get_userdetails",
+        AsyncMock(return_value=UserDetails(id=LECTURER, display_name="Lecturer Person", avatar_url=None)),
     )
     return control
 
@@ -127,14 +127,52 @@ async def book(webinar: Webinar) -> Any:
     return await register_for_webinar(data, webinar, _user(STUDENT))
 
 
+@pytest.mark.parametrize("authority", ["ordinary", "admin", "limited"])
+async def test_readable_webinar_never_serializes_account_names(
+    session: AsyncSession, client: AsyncClient, mocker: MockerFixture, authority: str
+) -> None:
+    from api.app import app
+    from api.endpoints.learning import learning_auth
+
+    admin = authority == "admin"
+    webinar = _webinar()
+    webinar.id = str(uuid4())
+    await db.add(webinar)
+    mocker.patch(
+        "api.auth.JWTAuth.__call__",
+        AsyncMock(return_value={"uid": STUDENT, "rt": "synthetic", "data": {"email_verified": True, "admin": admin}}),
+    )
+    mocker.patch("api.schemas.user.UserAccessToken.is_revoked", AsyncMock(return_value=False))
+    mocker.patch(
+        "api.auth.ordinary_authority", AsyncMock(return_value=User(id=STUDENT, email_verified=True, admin=admin))
+    )
+    cached: dict[str, Any] = {
+        "id": LECTURER,
+        "name": "PRIVATE-NICKNAME",
+        "display_name": "PRIVATE-DISPLAY-NAME",
+        "avatar_url": None,
+    }
+    mocker.patch("api.models.webinars.get_userinfo", AsyncMock(return_value=UserInfo(**cached)))
+
+    if authority == "limited":
+        app.dependency_overrides[learning_auth] = lambda: _user(STUDENT)
+    try:
+        prefix = "/learning" if authority == "limited" else ""
+        response = await client.get(f"{prefix}/webinars/{webinar.id}", headers={"Authorization": "Bearer synthetic"})
+    finally:
+        app.dependency_overrides.pop(learning_auth, None)
+
+    assert response.status_code == 200
+    assert response.json()["instructor"] == {"id": LECTURER, "avatar_url": None}
+    assert "PRIVATE-NICKNAME" not in response.text
+    assert "PRIVATE-DISPLAY-NAME" not in response.text
+
+
 @pytest.fixture(autouse=True)
 def serialize_patch(mocker: MockerFixture) -> None:
     """The response resolves the lecturer and their rating, both of which go through the cache."""
 
-    mocker.patch(
-        "api.models.webinars.get_userinfo",
-        AsyncMock(return_value=UserInfo(id=LECTURER, name="lecturer", display_name="Lecturer Person", avatar_url=None)),
-    )
+    mocker.patch("api.models.webinars.get_userinfo", AsyncMock(return_value=UserInfo(id=LECTURER, avatar_url=None)))
     mocker.patch("api.models.webinars.LecturerRating.get_rating", AsyncMock(return_value=None))
 
 

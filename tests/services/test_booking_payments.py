@@ -31,7 +31,7 @@ from api.models import (
 from api.models.slots import clean_old_slots
 from api.models.webinars import clean_old_webinars
 from api.reconcile_payments import report, resolve
-from api.schemas.user import User, UserInfo
+from api.schemas.user import User, UserDetails, UserInfo
 from api.services import booking_contracts, booking_payments
 from api.services.settlements import recover_settlements
 from api.services.user_deletion import delete_user_data
@@ -48,10 +48,13 @@ pytest_plugins = ["tests.services.test_settlements"]
 async def booking_ledger(ledger: Any, mocker: MockerFixture) -> Any:
     mocker.patch("api.endpoints.webinars.clear_cache", AsyncMock())
     mocker.patch("api.endpoints.coachings.clear_cache", AsyncMock())
-    info = UserInfo(id=HOST, name="host", display_name="Synthetic host", avatar_url=None)
+    mocker.patch(
+        "api.services.booking_contracts.get_userdetails",
+        AsyncMock(return_value=UserDetails(id=HOST, display_name="Synthetic host", avatar_url=None)),
+    )
+    info = UserInfo(id=HOST, avatar_url=None)
     for path in [
         "api.models.webinars.get_userinfo",
-        "api.services.booking_contracts.get_userinfo",
         "api.endpoints.coachings.get_userinfo",
         "api.endpoints.calendar.get_userinfo",
     ]:

@@ -13,7 +13,7 @@ from api.logger import get_logger
 from api.models.booking_contract import BookingContract
 from api.models.booking_payment import BookingPayment
 from api.services import booking_availability
-from api.services.auth import get_userinfo
+from api.services.auth import get_userdetails
 from api.services.internal import InternalService
 from api.utils.utc import utcnow
 
@@ -37,7 +37,7 @@ async def product(kind: str, event: Any, skill_id: str | None = None) -> dict[st
     if kind == "webinar" and event.closed_to_new_bookings:
         raise HTTPException(409, "Webinar closed to new bookings")
     instructor_id = event.creator if kind == "webinar" else event.user_id
-    instructor = await get_userinfo(instructor_id)
+    instructor = await get_userdetails(instructor_id)
     if instructor is None:
         raise HTTPException(412, "Instructor unavailable")
     emergency = await EmergencyCancel.exists(instructor_id)
