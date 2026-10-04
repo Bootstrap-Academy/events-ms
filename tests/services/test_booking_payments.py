@@ -48,7 +48,7 @@ pytest_plugins = ["tests.services.test_settlements"]
 async def booking_ledger(ledger: Any, mocker: MockerFixture) -> Any:
     mocker.patch("api.endpoints.webinars.clear_cache", AsyncMock())
     mocker.patch("api.endpoints.coachings.clear_cache", AsyncMock())
-    info = UserInfo(id=HOST, name="host", display_name="Synthetic host", avatar_url=None)
+    info = UserInfo(id=HOST, display_name="Synthetic host", avatar_url=None)
     for path in [
         "api.models.webinars.get_userinfo",
         "api.services.booking_contracts.get_userinfo",

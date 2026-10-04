@@ -111,7 +111,7 @@ def contract_backend(mocker: MockerFixture, spend_coins: AsyncMock) -> dict[str,
     )
     mocker.patch(
         "api.services.booking_contracts.get_userinfo",
-        AsyncMock(return_value=UserInfo(id=LECTURER, name="lecturer", display_name="Lecturer Person", avatar_url=None)),
+        AsyncMock(return_value=UserInfo(id=LECTURER, display_name="Lecturer Person", avatar_url=None)),
     )
     return control
 
@@ -127,13 +127,41 @@ async def book(webinar: Webinar) -> Any:
     return await register_for_webinar(data, webinar, _user(STUDENT))
 
 
+@pytest.mark.parametrize("admin", [False, True])
+async def test_readable_webinar_never_serializes_a_private_nickname(
+    session: AsyncSession, client: AsyncClient, mocker: MockerFixture, admin: bool
+) -> None:
+    await db.add(_webinar())
+    mocker.patch(
+        "api.auth.JWTAuth.__call__",
+        AsyncMock(return_value={"uid": STUDENT, "rt": "synthetic", "data": {"email_verified": True, "admin": admin}}),
+    )
+    mocker.patch("api.schemas.user.UserAccessToken.is_revoked", AsyncMock(return_value=False))
+    mocker.patch(
+        "api.auth.ordinary_authority", AsyncMock(return_value=User(id=STUDENT, email_verified=True, admin=admin))
+    )
+    cached: dict[str, Any] = {
+        "id": LECTURER,
+        "name": "PRIVATE-NICKNAME",
+        "display_name": "Lecturer Person",
+        "avatar_url": None,
+    }
+    mocker.patch("api.models.webinars.get_userinfo", AsyncMock(return_value=UserInfo(**cached)))
+
+    response = await client.get("/webinars/webinar", headers={"Authorization": "Bearer synthetic"})
+
+    assert response.status_code == 200
+    assert response.json()["instructor"] == {"id": LECTURER, "display_name": "Lecturer Person", "avatar_url": None}
+    assert "PRIVATE-NICKNAME" not in response.text
+
+
 @pytest.fixture(autouse=True)
 def serialize_patch(mocker: MockerFixture) -> None:
     """The response resolves the lecturer and their rating, both of which go through the cache."""
 
     mocker.patch(
         "api.models.webinars.get_userinfo",
-        AsyncMock(return_value=UserInfo(id=LECTURER, name="lecturer", display_name="Lecturer Person", avatar_url=None)),
+        AsyncMock(return_value=UserInfo(id=LECTURER, display_name="Lecturer Person", avatar_url=None)),
     )
     mocker.patch("api.models.webinars.LecturerRating.get_rating", AsyncMock(return_value=None))
 

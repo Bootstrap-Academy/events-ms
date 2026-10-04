@@ -34,7 +34,6 @@ class UserAccessToken(BaseModel):
 
 class UserInfo(BaseModel):
     id: str = Field(description="Unique identifier for the user")
-    name: str = Field(description="Unique username")
     display_name: str = Field(description="Full name of the user")
     avatar_url: str | None = Field(description="URL of the user's avatar")
 
@@ -42,6 +41,4 @@ class UserInfo(BaseModel):
         extra = Extra.ignore
 
     def __str__(self) -> str:
-        if self.name.lower() == self.display_name.lower():
-            return self.display_name
-        return f"{self.display_name} ({self.name})"
+        return self.display_name

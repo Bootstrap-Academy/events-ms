@@ -34,7 +34,7 @@ async def test___fetch_userinfo__does_not_cache_the_email_address(mocker: Mocker
     result = await auth._fetch_userinfo.__wrapped__("user42")  # type: ignore
 
     client.get.assert_called_once_with("/users/user42")
-    assert result == {"id": "user42", "name": "nickname", "display_name": "Display Name", "avatar_url": None}
+    assert result == {"id": "user42", "display_name": "Display Name", "avatar_url": None}
 
 
 async def test___fetch_userinfo__unknown_user(mocker: MockerFixture) -> None:
@@ -51,3 +51,6 @@ async def test__get_userinfo(mocker: MockerFixture, data: dict[str, str] | None)
 
     fetch_userinfo.assert_called_once_with("user42")
     assert result == (UserInfo(**data) if data else None)
+    if result is not None:
+        # Old cached dictionaries must also lose the private nickname on read.
+        assert "name" not in result.dict()

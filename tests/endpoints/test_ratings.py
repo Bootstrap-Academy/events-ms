@@ -10,7 +10,7 @@ from api.settings import settings
 
 
 def user_info(user_id: str, name: str) -> UserInfo:
-    return UserInfo(id=user_id, name=name, display_name=f"{name.title()} Person", avatar_url=None)
+    return UserInfo(id=user_id, display_name=f"{name.title()} Person", avatar_url=None)
 
 
 async def test__report_lecturer__mails_the_addresses_fetched_from_the_auth_service(
@@ -40,8 +40,8 @@ async def test__report_lecturer__mails_the_addresses_fetched_from_the_auth_servi
     assert [call.args for call in get_email.call_args_list] == [("student42",), ("lecturer42",)]
     recipient, title, body = send_email.call_args.args
     assert recipient == "abuse@example.com"
-    assert title == "[Report] Student Person (student) reported Lecturer Person (lecturer)"
-    assert "Student Person (student, student@example.com) reported" in body
-    assert "Lecturer Person (lecturer, lecturer@example.com) for the webinar Webinar" in body
+    assert title == "[Report] Student Person reported Lecturer Person"
+    assert "Student Person (student@example.com) reported" in body
+    assert "Lecturer Person (lecturer@example.com) for the webinar Webinar" in body
     assert send_email.call_args.kwargs == {"reply_to": "student@example.com"}
     delete.assert_called_once_with(rating)

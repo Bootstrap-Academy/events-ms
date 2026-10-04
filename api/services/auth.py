@@ -61,7 +61,7 @@ async def _fetch_userinfo(user_id: str) -> dict[str, Any] | None:
         if response.status_code != 200:
             return None
 
-        # only the fields UserInfo declares are cached, so no email address is written to redis here
+        # Cache only the response allowlist; private nicknames and emails stay out.
         return UserInfo(**response.json()).dict()
 
 

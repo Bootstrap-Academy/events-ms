@@ -97,8 +97,8 @@ async def report_lecturer(
         await send_email(
             settings.contact_email,
             f"[Report] {student} reported {lecturer}",
-            f"{student.display_name} ({student.name}, {student_email}) reported "
-            f"{lecturer.display_name} ({lecturer.name}, {lecturer_email}) for the webinar {r.webinar_name} "
+            f"{student.display_name} ({student_email}) reported "
+            f"{lecturer.display_name} ({lecturer_email}) for the webinar {r.webinar_name} "
             f"(skill: {r.skill_id}) on {r.webinar_timestamp} (UTC): {reason}",
             reply_to=student_email,
         )
