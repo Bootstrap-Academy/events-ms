@@ -20,7 +20,7 @@ class EmergencyCancel(Base):
 
     @classmethod
     async def delete(cls, user_id: str) -> bool:
-        if x := await db.get(cls, user_id=user_id):
+        if x := await db.first(filter_by(cls, user_id=user_id).with_for_update()):
             await db.delete(x)
             return True
         return False
