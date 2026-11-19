@@ -37,16 +37,21 @@
         projectDir = ./.;
         python = pkgs.python311;
         doCheck = false;
-        overrides = defaultPoetryOverrides.extend (self: super: {
-          aiohappyeyeballs = super.aiohappyeyeballs.override {preferWheel = true;};
-          aiohttp = super.aiohttp.override {preferWheel = true;};
-          aiosignal = super.aiosignal.override {preferWheel = true;};
-          propcache = super.propcache.override {preferWheel = true;};
-          yarl = super.yarl.override {preferWheel = true;};
-          frozenlist = super.frozenlist.overridePythonAttrs (old: {
-            buildInputs = (old.buildInputs or []) ++ [super.expandvars];
-          });
-        });
+        overrides = [
+          # Select wheels before the defaults attach source build hooks.
+          (self: super: {
+            aiohappyeyeballs = super.aiohappyeyeballs.override {preferWheel = true;};
+            aiohttp = super.aiohttp.override {preferWheel = true;};
+            aiosignal = super.aiosignal.override {preferWheel = true;};
+            propcache = super.propcache.override {preferWheel = true;};
+            yarl = super.yarl.override {preferWheel = true;};
+          })
+          (defaultPoetryOverrides.extend (self: super: {
+            frozenlist = super.frozenlist.overridePythonAttrs (old: {
+              buildInputs = (old.buildInputs or []) ++ [super.expandvars];
+            });
+          }))
+        ];
       };
     });
 
