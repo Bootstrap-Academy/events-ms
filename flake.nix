@@ -25,13 +25,22 @@
   in {
     packages = eachDefaultSystem (system: let
       pkgs = import nixpkgs {inherit system;};
-      inherit (poetry2nix.lib.mkPoetry2Nix {inherit pkgs;}) mkPoetryApplication defaultPoetryOverrides;
+      # Match Skills: newer wheel tags must not prevent evaluation.
+      poetry2nixSource = pkgs.applyPatches {
+        name = "poetry2nix-wheel-compat";
+        src = poetry2nix;
+        patches = [./nix/poetry2nix-wheel-arches.patch];
+      };
+      inherit (import poetry2nixSource {inherit pkgs;}) mkPoetryApplication defaultPoetryOverrides;
     in {
       default = mkPoetryApplication {
         projectDir = ./.;
         python = pkgs.python311;
         doCheck = false;
         overrides = defaultPoetryOverrides.extend (self: super: {
+          aiohttp = super.aiohttp.override {preferWheel = true;};
+          propcache = super.propcache.override {preferWheel = true;};
+          yarl = super.yarl.override {preferWheel = true;};
           frozenlist = super.frozenlist.overridePythonAttrs (old: {
             buildInputs = (old.buildInputs or []) ++ [super.expandvars];
           });
