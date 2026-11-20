@@ -1,0 +1,33 @@
+--- a/vendor/pyproject.nix/lib/pep600.nix
++++ b/vendor/pyproject.nix/lib/pep600.nix
+@@ -59,7 +59,7 @@
+     else if platform.libc != "glibc" then false
+     else if libc.pname != "glibc" then false
+     else if compareVersions "${sysMajor}.${sysMinor}" "${tagMajor}.${tagMinor}" < 0 then false
+-    else if pep599.manyLinuxTargetMachines.${tagArch} != platform.parsed.cpu.name then false
++    else if (pep599.manyLinuxTargetMachines.${tagArch} or null) != platform.parsed.cpu.name then false
+     else true;
+ 
+ })
+--- a/vendor/pyproject.nix/lib/pep656.nix
++++ b/vendor/pyproject.nix/lib/pep656.nix
+@@ -34,7 +34,7 @@
+     else if platform.libc != "musl" then false
+     else if libc.pname != "musl" then false
+     else if compareVersions "${sysMajor}.${sysMinor}" "${tagMajor}.${tagMinor}" < 0 then false
+-    else if pep599.manyLinuxTargetMachines.${tagArch} != platform.parsed.cpu.name then false
++    else if (pep599.manyLinuxTargetMachines.${tagArch} or null) != platform.parsed.cpu.name then false
+     else true;
+ 
+ }
+--- a/vendor/pyproject.nix/lib/pypa.nix
++++ b/vendor/pyproject.nix/lib/pypa.nix
+@@ -86,7 +86,7 @@
+   parseABITag =
+     tag:
+     let
+-      m = match "([a-z]+)([0-9]*)_?([a-z0-9]*)" tag;
++      m = match "([a-z]+)([0-9]*)_?([a-z0-9_]*)" tag;
+       mAt = elemAt m;
+     in
+     assert m != null; {
